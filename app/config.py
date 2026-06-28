@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     supabase_key: str = Field(default="", alias="SUPABASE_KEY")
     supabase_service_key: str = Field(default="", alias="SUPABASE_SERVICE_KEY")
 
+    supabase_alert_webhook_url: str = Field(default="", alias="SUPABASE_ALERT_WEBHOOK_URL")
+    alert_webhook_secret: str = Field(default="", alias="ALERT_WEBHOOK_SECRET")
+
     jci_metasys_host: str = Field(default="", alias="JCI_METASYS_HOST")
     jci_metasys_username: str = Field(default="", alias="JCI_METASYS_USERNAME")
     jci_metasys_password: str = Field(default="", alias="JCI_METASYS_PASSWORD")

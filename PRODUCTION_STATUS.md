@@ -1,44 +1,66 @@
-# BuildOpt production — completed setup log
-# Generated: 2026-06-28
+# BuildOpt — connection status
 
-## Done automatically
+## Connected now (automated)
 
-- [x] Linked Railway project `buildopt-backend` (unique-expression)
-- [x] Set Railway variables: DEMO_MODE, SECRET_KEY, INGEST_API_KEY, SUPABASE_URL, SUPABASE_KEY, CORS, GCC coords
-- [x] Deployed latest code to Railway (`railway up`)
-- [x] Verified `/api/v1/health` and `/api/v1/ingest/status`
-- [x] Verified ingest API pushes live data (210 kW test)
-- [x] Created `edge/.env` with matching INGEST_API_KEY
+| Connection | Status | URL |
+|------------|--------|-----|
+| **Frontend → Railway** | Live | build-opt.site → buildopt-backend-production.up.railway.app |
+| **Railway API** | Online | /api/v1/health |
+| **Ingest API** | Live | POST /api/v1/ingest/live |
+| **InfluxDB on Railway** | Service added | influxdb.railway.internal:8086 |
+| **Supabase alert webhook** | Configured | Railway → edge function URL (deploy via Lovable) |
 
-## One manual step remaining
+Check all connections:
+```
+GET https://buildopt-backend-production.up.railway.app/api/v1/health/connections
+```
 
-**Supabase service role key** (cannot be read from frontend — secret):
+---
 
-1. Open https://supabase.com/dashboard/project/arddnpiluxrkndzzdpfi/settings/api
-2. Copy **service_role** key (secret)
-3. Railway → Variables → add:
-   ```
-   SUPABASE_SERVICE_KEY=<paste service_role key>
-   ```
-4. Supabase → SQL Editor → paste and run:
-   `supabase/migrations/001_building_alerts.sql`
+## Your action in Lovable (2 prompts)
 
-After that, FDD alerts from the pipeline will sync to Supabase.
+### 1. Wire all pages to API
+Paste **`frontend-integration/LOVABLE_WIRE_ALL.md`** into Lovable chat → republish.
 
-## Railway URLs
+### 2. Deploy Supabase edge function (no dashboard access)
+Paste **`frontend-integration/LOVABLE_SUPABASE_EDGE.md`** into Lovable chat.
 
-- API: https://buildopt-backend-production.up.railway.app
-- Docs: https://buildopt-backend-production.up.railway.app/docs
-- Frontend: https://build-opt.site
+This creates `sync-bms-alert` edge function so Railway can push alerts to Supabase without you holding the service_role key.
 
-## Ingest API key (also in Railway + edge/.env)
+Secret to add in **Lovable Cloud → Secrets**:
+```
+BUILDOPT_WEBHOOK_SECRET=buildopt-alert-sync-2026-secret
+```
+(Same value already set on Railway as `ALERT_WEBHOOK_SECRET`)
 
-Store securely — required for edge gateway POST /api/v1/ingest/live
+---
 
-See Railway dashboard → buildopt-backend → Variables → INGEST_API_KEY
+## When you get Metasys credentials (site IT)
 
-## Optional next
+Railway → Variables:
+```env
+JCI_METASYS_HOST=https://...
+JCI_METASYS_USERNAME=...
+JCI_METASYS_PASSWORD=...
+DEMO_MODE=false
+```
 
-- InfluxDB Cloud token → Railway INFLUX_* vars
-- Metasys creds → Railway JCI_* vars
-- Set DEMO_MODE=false when real BMS data flows
+---
+
+## Edge gateway (on-site BACnet/Modbus)
+
+```powershell
+cd edge
+docker compose up -d
+```
+
+---
+
+## Architecture
+
+```
+build-opt.site ──► Railway API ──► InfluxDB (Railway internal)
+                      │
+                      ├──► Supabase edge fn (via Lovable)
+                      └──► Edge agent (on-site BMS)
+```

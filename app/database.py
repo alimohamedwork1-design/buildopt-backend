@@ -23,4 +23,6 @@ def get_supabase_service() -> SupabaseService:
         key=settings.supabase_key,
         service_key=settings.supabase_service_key,
         demo_mode=settings.demo_mode,
+        alert_webhook_url=settings.supabase_alert_webhook_url,
+        alert_webhook_secret=settings.alert_webhook_secret,
     )

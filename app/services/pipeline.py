@@ -42,6 +42,8 @@ async def run_poll_cycle() -> None:
         settings.supabase_key,
         settings.supabase_service_key,
         demo_mode=False,
+        alert_webhook_url=settings.supabase_alert_webhook_url,
+        alert_webhook_secret=settings.alert_webhook_secret,
     )
     fault_detector = FaultDetector(demo_mode=False)
 

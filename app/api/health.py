@@ -25,6 +25,33 @@ async def health_check() -> HealthResponse:
     )
 
 
+@router.get("/connections")
+async def connection_health() -> dict:
+    settings = get_settings()
+    from app.database import get_influx_service, get_supabase_service
+
+    influx = get_influx_service()
+    supabase = get_supabase_service()
+    jci = JCIMetasysClient(
+        settings.jci_metasys_host,
+        settings.jci_metasys_username,
+        settings.jci_metasys_password,
+        settings.jci_metasys_version,
+        settings.demo_mode,
+    )
+
+    return {
+        "demo_mode": settings.demo_mode,
+        "influxdb": influx.status(),
+        "supabase": supabase.status(),
+        "jci_metasys": jci.status(),
+        "alert_webhook": bool(settings.supabase_alert_webhook_url),
+        "ingest_api": bool(settings.ingest_api_key),
+        "frontend": "https://build-opt.site",
+        "api_url": "https://buildopt-backend-production.up.railway.app",
+    }
+
+
 @router.get("/protocols", response_model=ProtocolStatus)
 async def protocol_health() -> ProtocolStatus:
     settings = get_settings()
