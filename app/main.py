@@ -5,7 +5,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import alerts, buildings, energy, equipment, gcc, health, ingest, jci, ml, protocols
+from app.api import alerts, buildings, energy, equipment, gcc, health, ingest, jci, ml, modules, protocols, sessions, site
 from app.config import get_settings
 from app.services.pipeline import run_poll_cycle
 
@@ -57,6 +57,9 @@ app.include_router(jci.router, prefix=api_prefix)
 app.include_router(gcc.router, prefix=api_prefix)
 app.include_router(protocols.router, prefix=api_prefix)
 app.include_router(ingest.router, prefix=api_prefix)
+app.include_router(modules.router, prefix=api_prefix)
+app.include_router(sessions.router, prefix=api_prefix)
+app.include_router(site.router, prefix=api_prefix)
 
 
 @app.get("/")
