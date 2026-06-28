@@ -31,11 +31,23 @@ class SupabaseService:
     def push_alert(self, alert: Dict[str, Any]) -> bool:
         if self.demo_mode or self._client is None:
             return True
-        try:
-            self._client.table("alerts").insert(alert).execute()
-            return True
-        except Exception:
-            return False
+        row = {
+            "id": alert.get("id"),
+            "building_id": alert.get("building_id"),
+            "severity": alert.get("severity"),
+            "category": alert.get("category"),
+            "title": alert.get("title"),
+            "message": alert.get("message"),
+            "acknowledged": alert.get("acknowledged", False),
+            "created_at": alert.get("timestamp"),
+        }
+        for table in ("alerts", "building_alerts"):
+            try:
+                self._client.table(table).upsert(row).execute()
+                return True
+            except Exception:
+                continue
+        return False
 
     def anonymize_user_id(self, user_id: Optional[str]) -> str:
         if not user_id:

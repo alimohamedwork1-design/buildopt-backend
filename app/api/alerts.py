@@ -1,9 +1,9 @@
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
-from app.models.schemas import Alert, AlertAcknowledge, FDDResult
-from app.services import demo_mode
+from app.models.schemas import Alert, AlertAcknowledge, EquipmentDetail, EquipmentSummary, MetricPoint, SetpointUpdate
+from app.services import live_data_service
 from app.utils.arabic_utils import bilingual_error, bilingual_success
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -11,17 +11,17 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 @router.get("", response_model=List[Alert])
 async def list_alerts() -> List[Alert]:
-    return demo_mode.list_alerts()
+    return live_data_service.list_alerts()
 
 
 @router.get("/history", response_model=List[Alert])
 async def alert_history() -> List[Alert]:
-    return demo_mode.list_alert_history()
+    return live_data_service.list_alert_history()
 
 
 @router.post("/{alert_id}/acknowledge")
 async def acknowledge_alert(alert_id: str, payload: AlertAcknowledge) -> dict:
-    alerts = demo_mode.list_alerts()
+    alerts = live_data_service.list_alerts()
     if not any(alert.id == alert_id for alert in alerts):
         raise HTTPException(status_code=404, detail=bilingual_error("Alert not found", "التنبيه غير موجود"))
 
@@ -33,6 +33,6 @@ async def acknowledge_alert(alert_id: str, payload: AlertAcknowledge) -> dict:
     }
 
 
-@router.get("/fdd", response_model=List[FDDResult])
-async def fdd_results() -> List[FDDResult]:
-    return demo_mode.list_fdd_results()
+@router.get("/fdd")
+async def fdd_results():
+    return live_data_service.list_fdd_results()

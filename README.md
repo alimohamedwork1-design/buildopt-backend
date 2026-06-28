@@ -67,6 +67,8 @@ Set `ALLOWED_ORIGINS=https://build-opt.site,https://www.build-opt.site` for CORS
 
 Connect the Lovable frontend: see **[frontend-integration/LOVABLE_SETUP.md](./frontend-integration/LOVABLE_SETUP.md)**.
 
+Production / real BMS integration: see **[PRODUCTION.md](./PRODUCTION.md)**.
+
 ## Testing
 
 ```bash

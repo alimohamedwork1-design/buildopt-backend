@@ -1,5 +1,7 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
+from app.models.schemas import LiveBuildingData, EnvironmentData, EnergyData, HVACData
 
 
 class InfluxService:
@@ -62,4 +64,87 @@ class InfluxService:
     def query_metrics(self, building_id: str, hours: int = 24) -> List[Dict[str, Any]]:
         if self.demo_mode or self._client is None:
             return []
-        return []
+
+        try:
+            start = f"-{hours}h"
+            flux = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: {start})
+              |> filter(fn: (r) => r["building_id"] == "{building_id}")
+              |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+            '''
+            tables = self._client.query_api().query(flux, org=self.org)
+            results: List[Dict[str, Any]] = []
+            for table in tables:
+                for record in table.records:
+                    results.append(
+                        {
+                            "timestamp": record.get_time(),
+                            "value": float(record.get_value()),
+                            "metric": record.get_field(),
+                        }
+                    )
+            return results
+        except Exception:
+            return []
+
+    def get_latest_snapshot(self, building_id: str) -> Optional[LiveBuildingData]:
+        if self.demo_mode or self._client is None:
+            return None
+
+        try:
+            flux = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: -15m)
+              |> filter(fn: (r) => r["building_id"] == "{building_id}")
+              |> last()
+            '''
+            tables = self._client.query_api().query(flux, org=self.org)
+            fields: Dict[str, float] = {}
+            ts = datetime.now(timezone.utc)
+            for table in tables:
+                for record in table.records:
+                    fields[record.get_field()] = float(record.get_value())
+                    ts = record.get_time() or ts
+
+            if not fields:
+                return None
+
+            hvac_kw = fields.get("hvac_kw", 195.0)
+            total_kw = fields.get("total_kw", hvac_kw * 4.0)
+            supply = fields.get("supply_air_temp", 14.0)
+            temp_c = fields.get("temp_c", 23.0)
+            cop = fields.get("cop", 3.8)
+            co2 = int(fields.get("co2_ppm", 600))
+            hour = datetime.now(timezone.utc).hour
+            tariff = 0.38 if 12 <= hour < 24 else 0.23
+
+            return LiveBuildingData(
+                building_id=building_id,
+                timestamp=ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc),
+                hvac=HVACData(
+                    supply_air_temp=supply,
+                    return_air_temp=supply + 10,
+                    delta_t=10.0,
+                    power_kw=hvac_kw,
+                    cop=cop,
+                ),
+                energy=EnergyData(
+                    total_kw=total_kw,
+                    hvac_kw=hvac_kw,
+                    lighting_kw=round(total_kw * 0.15, 1),
+                    other_kw=round(total_kw * 0.55, 1),
+                    tariff_rate=tariff,
+                    cost_per_hour=round(total_kw * tariff, 1),
+                ),
+                environment=EnvironmentData(
+                    temp_c=temp_c,
+                    humidity_pct=48.0,
+                    co2_ppm=co2,
+                    pm25=20.0,
+                ),
+                active_alerts=0,
+                demo_mode=False,
+            )
+        except Exception:
+            return None

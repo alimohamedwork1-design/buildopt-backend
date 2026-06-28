@@ -5,27 +5,25 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import alerts, buildings, energy, equipment, gcc, health, jci, ml, protocols
+from app.api import alerts, buildings, energy, equipment, gcc, health, ingest, jci, ml, protocols
 from app.config import get_settings
-from app.services.demo_mode import get_live_data
+from app.services.pipeline import run_poll_cycle
 
 
 scheduler = AsyncIOScheduler()
 
 
-async def poll_building_data() -> None:
-    settings = get_settings()
-    if settings.demo_mode:
-        for building_id in ["burj-khalifa-01", "dubai-mall-01", "difc-gate-01"]:
-            get_live_data(building_id)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    if not settings.demo_mode:
-        scheduler.add_job(poll_building_data, "interval", seconds=30, id="poll_building_data")
-        scheduler.start()
+    scheduler.add_job(
+        run_poll_cycle,
+        "interval",
+        seconds=settings.poll_interval_seconds,
+        id="poll_building_data",
+    )
+    scheduler.start()
+    await run_poll_cycle()
     yield
     if scheduler.running:
         scheduler.shutdown(wait=False)
@@ -42,6 +40,7 @@ settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
+    allow_origin_regex=r"https://.*\.(lovable\.app|lovableproject\.com)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,6 +56,7 @@ app.include_router(ml.router, prefix=api_prefix)
 app.include_router(jci.router, prefix=api_prefix)
 app.include_router(gcc.router, prefix=api_prefix)
 app.include_router(protocols.router, prefix=api_prefix)
+app.include_router(ingest.router, prefix=api_prefix)
 
 
 @app.get("/")

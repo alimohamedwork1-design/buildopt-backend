@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     latitude: float = Field(default=25.2048, alias="LATITUDE")
     longitude: float = Field(default=55.2708, alias="LONGITUDE")
 
+    ingest_api_key: str = Field(default="", alias="INGEST_API_KEY")
+    poll_interval_seconds: int = Field(default=30, alias="POLL_INTERVAL_SECONDS")
+
     @property
     def cors_origins(self) -> List[str]:
         return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]

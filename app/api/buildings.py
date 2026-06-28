@@ -1,11 +1,10 @@
 import asyncio
 import json
-from typing import AsyncGenerator, List, Optional
+from typing import AsyncGenerator, List
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from app.config import get_settings
 from app.models.schemas import (
     BilingualMessage,
     BuildingDetail,
@@ -15,7 +14,7 @@ from app.models.schemas import (
     ControlResponse,
     LiveBuildingData,
 )
-from app.services import demo_mode
+from app.services import live_data_service
 from app.utils.arabic_utils import bilingual_error
 
 router = APIRouter(prefix="/buildings", tags=["buildings"])
@@ -23,20 +22,12 @@ router = APIRouter(prefix="/buildings", tags=["buildings"])
 
 @router.get("", response_model=List[BuildingSummary])
 async def list_buildings() -> List[BuildingSummary]:
-    settings = get_settings()
-    if settings.demo_mode:
-        return demo_mode.list_buildings()
-    return demo_mode.list_buildings()
+    return live_data_service.list_buildings()
 
 
 @router.get("/{building_id}", response_model=BuildingDetail)
 async def get_building(building_id: str) -> BuildingDetail:
-    settings = get_settings()
-    if settings.demo_mode:
-        building = demo_mode.get_building(building_id)
-    else:
-        building = demo_mode.get_building(building_id)
-
+    building = live_data_service.get_building(building_id)
     if not building:
         raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
     return building
@@ -44,12 +35,7 @@ async def get_building(building_id: str) -> BuildingDetail:
 
 @router.get("/{building_id}/live", response_model=LiveBuildingData)
 async def get_live_data(building_id: str) -> LiveBuildingData:
-    settings = get_settings()
-    if settings.demo_mode:
-        data = demo_mode.get_live_data(building_id)
-    else:
-        data = demo_mode.get_live_data(building_id)
-
+    data = await live_data_service.get_live_data(building_id)
     if not data:
         raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
     return data
@@ -59,7 +45,7 @@ async def get_live_data(building_id: str) -> LiveBuildingData:
 async def stream_live_data(building_id: str) -> StreamingResponse:
     async def event_generator() -> AsyncGenerator[str, None]:
         while True:
-            data = demo_mode.get_live_data(building_id)
+            data = await live_data_service.get_live_data(building_id)
             if data:
                 payload = data.model_dump(mode="json")
                 yield f"data: {json.dumps(payload)}\n\n"
@@ -73,7 +59,7 @@ async def get_metrics(
     building_id: str,
     period: str = Query(default="24h", pattern="^(1h|24h|7d)$"),
 ) -> BuildingMetrics:
-    metrics = demo_mode.get_building_metrics(building_id, period)
+    metrics = live_data_service.get_building_metrics(building_id, period)
     if not metrics:
         raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
     return metrics
@@ -81,7 +67,7 @@ async def get_metrics(
 
 @router.post("/{building_id}/control", response_model=ControlResponse)
 async def send_control(building_id: str, command: ControlCommand) -> ControlResponse:
-    building = demo_mode.get_building(building_id)
+    building = live_data_service.get_building(building_id)
     if not building:
         raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
 
