@@ -1,66 +1,57 @@
-# BuildOpt — connection status
+# BuildOpt — Full Site Integration
 
-## Connected now (automated)
+## Site audit (build-opt.site)
 
-| Connection | Status | URL |
-|------------|--------|-----|
-| **Frontend → Railway** | Live | build-opt.site → buildopt-backend-production.up.railway.app |
-| **Railway API** | Online | /api/v1/health |
-| **Ingest API** | Live | POST /api/v1/ingest/live |
-| **InfluxDB on Railway** | Service added | influxdb.railway.internal:8086 |
-| **Supabase alert webhook** | Configured | Railway → edge function URL (deploy via Lovable) |
+- **177 routes** (172 modules + auth)
+- **6 routes** previously wired to Railway API
+- **165+ routes** were mock-only → now served via `/api/v1/modules/{slug}/data`
 
-Check all connections:
-```
-GET https://buildopt-backend-production.up.railway.app/api/v1/health/connections
-```
+## Backend (deployed)
 
----
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/v1/site/metadata` | Site name, version, building, features |
+| `GET /api/v1/modules` | All 172 module registry |
+| `GET /api/v1/modules/{slug}/data` | **Universal data for any page** |
+| `POST /api/v1/sessions/events` | Login, page_view, logout tracking |
+| `GET /api/v1/sessions/stats` | Active user stats |
+| Existing `/buildings`, `/energy`, `/alerts`, `/gcc`, etc. | Specialized endpoints |
 
-## Your action in Lovable (2 prompts)
+## Lovable — ONE prompt to configure everything
 
-### 1. Wire all pages to API
-Paste **`frontend-integration/LOVABLE_WIRE_ALL.md`** into Lovable chat → republish.
+Paste into Lovable chat:
 
-### 2. Deploy Supabase edge function (no dashboard access)
-Paste **`frontend-integration/LOVABLE_SUPABASE_EDGE.md`** into Lovable chat.
+### **`frontend-integration/LOVABLE_MASTER_INTEGRATION.md`**
 
-This creates `sync-bms-alert` edge function so Railway can push alerts to Supabase without you holding the service_role key.
+This configures:
+- All 172 pages → `useModulePageData()` hook
+- Login → backend session tracking (PDPL-safe, anonymized)
+- Page views → automatic backend events
+- TopStatusBar → real health check
+- Metadata → index.html SEO tags
+- Priority pages → specialized hooks (live, FDD, DEWA, prayer)
+- Supabase edge function for alert sync
 
-Secret to add in **Lovable Cloud → Secrets**:
-```
-BUILDOPT_WEBHOOK_SECRET=buildopt-alert-sync-2026-secret
-```
-(Same value already set on Railway as `ALERT_WEBHOOK_SECRET`)
-
----
-
-## When you get Metasys credentials (site IT)
-
-Railway → Variables:
-```env
-JCI_METASYS_HOST=https://...
-JCI_METASYS_USERNAME=...
-JCI_METASYS_PASSWORD=...
-DEMO_MODE=false
-```
-
----
-
-## Edge gateway (on-site BACnet/Modbus)
-
-```powershell
-cd edge
-docker compose up -d
-```
-
----
-
-## Architecture
+### Files to copy into Lovable repo
 
 ```
-build-opt.site ──► Railway API ──► InfluxDB (Railway internal)
-                      │
-                      ├──► Supabase edge fn (via Lovable)
-                      └──► Edge agent (on-site BMS)
+src/lib/buildopt-api.ts          ← frontend-integration/src/lib/buildopt-api.ts
+src/hooks/useBuildOptApi.ts      ← frontend-integration/src/hooks/useBuildOptApi.ts
 ```
+
+## Verify after Lovable republish
+
+```bash
+# Any module page
+curl https://buildopt-backend-production.up.railway.app/api/v1/modules/fdd/data
+
+# Login tracking
+curl -X POST https://buildopt-backend-production.up.railway.app/api/v1/sessions/events \
+  -H "Content-Type: application/json" \
+  -d '{"event_type":"login","email":"demo@buildopt.ai","role":"facility_manager"}'
+
+# Site metadata
+curl https://buildopt-backend-production.up.railway.app/api/v1/site/metadata
+```
+
+On build-opt.site: F12 → Network → filter `railway` → every page should hit `/modules/{slug}/data`
