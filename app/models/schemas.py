@@ -258,6 +258,17 @@ class HealthResponse(BaseModel):
     version: str
     demo_mode: bool
     timestamp: datetime
+    health_score: int = 100
+    health_label: str = "All systems operational"
+    health_label_ar: str = "جميع الأنظمة تعمل"
+    uptime_seconds: int = 0
+
+
+class JCIConnectionRequest(BaseModel):
+    host: str
+    username: str
+    password: str
+    version: str = "v4"
 
 
 class ProtocolStatus(BaseModel):

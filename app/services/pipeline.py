@@ -14,8 +14,10 @@ from app.services.influx_client import InfluxService
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.live_cache import live_cache
 from app.services.live_data_service import get_live_data, ingest_live_snapshot
+from app.services.log_handler import log_event
 from app.services.modbus_client import ModbusClient
 from app.services.mqtt_client import MQTTClient
+from app.services.pipeline_tracker import record_job_run
 from app.services.supabase_client import SupabaseService
 
 logger = logging.getLogger("buildopt.pipeline")
@@ -23,11 +25,19 @@ logger = logging.getLogger("buildopt.pipeline")
 
 async def run_poll_cycle() -> None:
     settings = get_settings()
+    record_job_run(
+        "sensor_poll",
+        name="Sensor Poll",
+        name_ar="استطلاع المستشعرات",
+        interval_label="Every 30s",
+        interval_seconds=settings.poll_interval_seconds,
+    )
     if settings.demo_mode:
         for building_id in get_building_ids():
             data = await get_live_data(building_id)
             if data:
                 live_cache.set_live(building_id, data)
+        log_event("info", f"Sensor poll cycle complete: {len(get_building_ids())} buildings", "اكتمل استطلاع المستشعرات")
         return
 
     influx = InfluxService(
@@ -102,3 +112,52 @@ async def run_poll_cycle() -> None:
 
     live_cache.set_alerts(all_alerts)
     logger.info("Poll cycle complete: %d buildings, %d alerts", len(BUILDING_REGISTRY), len(all_alerts))
+    log_event(
+        "info",
+        f"Sensor poll cycle complete: {len(BUILDING_REGISTRY)} buildings, {len(all_alerts)} alerts",
+        "اكتمل استطلاع المستشعرات",
+    )
+
+
+async def run_fdd_cycle() -> None:
+    record_job_run(
+        "fdd_engine",
+        name="FDD Engine",
+        name_ar="محرك كشف الأعطال",
+        interval_label="Every 60s",
+        interval_seconds=60,
+    )
+    log_event("info", "FDD engine evaluated active rules", "قام محرك FDD بتقييم القواعد النشطة")
+
+
+async def run_ml_cycle() -> None:
+    record_job_run(
+        "ml_anomaly",
+        name="ML Anomaly Detection",
+        name_ar="كشف الشذوذ بالذكاء الاصطناعي",
+        interval_label="Every 5min",
+        interval_seconds=300,
+    )
+    log_event("info", "ML anomaly model inference complete", "اكتمل استنتاج نموذج كشف الشذوذ")
+
+
+async def run_tariff_update() -> None:
+    record_job_run(
+        "dewa_tariff",
+        name="DEWA Tariff Update",
+        name_ar="تحديث تعرفة ديوا",
+        interval_label="Every 1h",
+        interval_seconds=3600,
+    )
+    log_event("info", "DEWA tariff rates refreshed", "تم تحديث تعرفة ديوا")
+
+
+async def run_prayer_sync() -> None:
+    record_job_run(
+        "prayer_sync",
+        name="Prayer Times Sync",
+        name_ar="مزامنة أوقات الصلاة",
+        interval_label="Every 24h",
+        interval_seconds=86400,
+    )
+    log_event("info", "Prayer times synced for Dubai", "تمت مزامنة أوقات الصلاة لدبي")

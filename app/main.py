@@ -7,7 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import alerts, buildings, energy, equipment, gcc, health, ingest, jci, ml, modules, protocols, sessions, site
 from app.config import get_settings
-from app.services.pipeline import run_poll_cycle
+from app.services.connection_store import connection_store
+from app.services.log_handler import install_log_handler, log_event
+from app.services.pipeline import run_fdd_cycle, run_ml_cycle, run_poll_cycle, run_prayer_sync, run_tariff_update
+from app.services.pipeline_tracker import seed_demo_jobs
 
 
 scheduler = AsyncIOScheduler()
@@ -16,14 +19,27 @@ scheduler = AsyncIOScheduler()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    install_log_handler()
+    await connection_store.load_metasys_from_supabase()
+
+    if settings.demo_mode:
+        seed_demo_jobs()
+
     scheduler.add_job(
         run_poll_cycle,
         "interval",
         seconds=settings.poll_interval_seconds,
         id="poll_building_data",
     )
+    scheduler.add_job(run_fdd_cycle, "interval", seconds=60, id="fdd_engine")
+    scheduler.add_job(run_ml_cycle, "interval", minutes=5, id="ml_anomaly")
+    scheduler.add_job(run_tariff_update, "interval", hours=1, id="dewa_tariff")
+    scheduler.add_job(run_prayer_sync, "interval", hours=24, id="prayer_sync")
     scheduler.start()
+
+    log_event("info", "BuildOpt pipeline started", "تم تشغيل خط أنابيب BuildOpt")
     await run_poll_cycle()
+    await run_fdd_cycle()
     yield
     if scheduler.running:
         scheduler.shutdown(wait=False)

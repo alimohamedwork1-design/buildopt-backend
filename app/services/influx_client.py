@@ -88,6 +88,44 @@ class InfluxService:
         except Exception:
             return []
 
+    def write_health_point(self, response_ms: float, status: str = "healthy") -> bool:
+        return self.write_point(
+            "api_health",
+            response_ms,
+            tags={"status": status},
+        )
+
+    def query_health_history(self, hours: int = 24) -> List[Dict[str, Any]]:
+        if self.demo_mode or self._client is None:
+            return []
+
+        try:
+            start = f"-{hours}h"
+            flux = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: {start})
+              |> filter(fn: (r) => r["_measurement"] == "api_health")
+              |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
+            '''
+            tables = self._client.query_api().query(flux, org=self.org)
+            results: List[Dict[str, Any]] = []
+            for table in tables:
+                for record in table.records:
+                    ts = record.get_time()
+                    if ts and ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    status_tag = record.values.get("status", "healthy")
+                    results.append(
+                        {
+                            "timestamp": ts.isoformat().replace("+00:00", "Z") if ts else "",
+                            "response_ms": int(float(record.get_value())),
+                            "status": status_tag,
+                        }
+                    )
+            return results
+        except Exception:
+            return []
+
     def get_latest_snapshot(self, building_id: str) -> Optional[LiveBuildingData]:
         if self.demo_mode or self._client is None:
             return None

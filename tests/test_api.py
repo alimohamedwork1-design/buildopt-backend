@@ -15,6 +15,7 @@ def test_health(client):
     data = response.json()
     assert data["status"] == "healthy"
     assert "demo_mode" in data
+    assert "health_score" in data
 
 
 def test_list_buildings(client):
