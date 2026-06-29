@@ -389,8 +389,12 @@ def list_fdd_results() -> List[FDDResult]:
 
 def get_jci_objects() -> List[Dict[str, Any]]:
     return [
-        {"id": "obj-1001", "name": "CHW-Supply-Temp", "type": "Analog Input", "present_value": 6.8},
-        {"id": "obj-1002", "name": "CHW-Return-Temp", "type": "Analog Input", "present_value": 12.4},
+        {"id": "obj-1001", "name": "AHU1-SAT", "type": "Analog Input", "present_value": 14.2},
+        {"id": "obj-1002", "name": "AHU1-RAT", "type": "Analog Input", "present_value": 22.8},
+        {"id": "obj-1010", "name": "CH1-HVAC-KW", "type": "Analog Input", "present_value": 342.0},
+        {"id": "obj-1020", "name": "Main-Total-KW", "type": "Analog Input", "present_value": 1124.0},
+        {"id": "obj-1030", "name": "Zone-Avg-Temp", "type": "Analog Input", "present_value": 23.1},
+        {"id": "obj-1040", "name": "Floor12-CO2", "type": "Analog Input", "present_value": 680.0},
         {"id": "obj-2001", "name": "Chiller-Enable", "type": "Binary Output", "present_value": True},
         {"id": "obj-3001", "name": "OA-Damper-Cmd", "type": "Analog Output", "present_value": 45.0},
     ]

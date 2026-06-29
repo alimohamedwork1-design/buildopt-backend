@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import alerts, buildings, energy, equipment, gcc, health, ingest, jci, ml, modules, protocols, sessions, site
 from app.config import get_settings
+from app.services.bms_auto_connect import run_bms_auto_connect
 from app.services.connection_store import connection_store
 from app.services.log_handler import install_log_handler, log_event
 from app.services.pipeline import run_fdd_cycle, run_metasys_keepalive, run_ml_cycle, run_poll_cycle, run_prayer_sync, run_tariff_update
@@ -21,6 +22,8 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     install_log_handler()
     await connection_store.load_metasys_from_supabase()
+    if connection_store.has_saved_metasys() and not settings.demo_mode:
+        await run_bms_auto_connect(merge=True)
 
     if settings.app_env.lower() in ("production", "prod") and not settings.ingest_api_key:
         log_event(
