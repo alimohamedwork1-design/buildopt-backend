@@ -45,12 +45,6 @@ class SupabaseService:
         if self.demo_mode:
             return True
 
-        if self.alert_webhook_url:
-            return self._push_via_webhook(alert)
-
-        if self._client is None:
-            return True
-
         row = {
             "id": alert.get("id"),
             "building_id": alert.get("building_id"),
@@ -63,10 +57,43 @@ class SupabaseService:
             "acknowledged": alert.get("acknowledged", False),
             "created_at": alert.get("timestamp"),
         }
-        for table in ("alerts", "building_alerts"):
-            try:
-                self._client.table(table).upsert(row).execute()
+
+        if self.alert_webhook_url:
+            if self._push_via_webhook(alert):
                 return True
+
+        if self._push_via_rest(row):
+            return True
+
+        if self._client is not None:
+            for table in ("building_alerts", "alerts"):
+                try:
+                    self._client.table(table).upsert(row).execute()
+                    return True
+                except Exception:
+                    continue
+        return False
+
+    def _push_via_rest(self, row: Dict[str, Any]) -> bool:
+        auth_key = self.service_key or self.key
+        if not self.url or not auth_key:
+            return False
+        headers = {
+            "apikey": auth_key,
+            "Authorization": f"Bearer {auth_key}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates",
+        }
+        for table in ("building_alerts", "alerts"):
+            try:
+                response = httpx.post(
+                    f"{self.url.rstrip('/')}/rest/v1/{table}",
+                    headers=headers,
+                    json=row,
+                    timeout=10.0,
+                )
+                if response.status_code in (200, 201, 204):
+                    return True
             except Exception:
                 continue
         return False
