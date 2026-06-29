@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import json
 import os
+import sqlite3
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 
@@ -13,15 +16,75 @@ API_URL = os.getenv("RAILWAY_API_URL", "https://buildopt-backend-production.up.r
 API_KEY = os.getenv("INGEST_API_KEY", "")
 BUILDING_ID = os.getenv("BUILDING_ID", "burj-khalifa-01")
 POLL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "30"))
+MAX_RETRIES = int(os.getenv("INGEST_MAX_RETRIES", "5"))
+QUEUE_DB = Path(os.getenv("EDGE_QUEUE_DB", "/data/edge_queue.db"))
+ENABLE_BACNET = os.getenv("ENABLE_BACNET", "false").lower() == "true"
 
 BACNET_IP = os.getenv("BACNET_IP", "192.168.1.100")
 MODBUS_HOST = os.getenv("MODBUS_HOST", "192.168.1.101")
 MODBUS_PORT = int(os.getenv("MODBUS_PORT", "502"))
 
 
+def init_queue() -> sqlite3.Connection:
+    QUEUE_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(QUEUE_DB)
+    conn.execute(
+        """
+        create table if not exists pending_snapshots (
+            id integer primary key autoincrement,
+            payload text not null,
+            created_at text not null,
+            attempts integer default 0
+        )
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def enqueue(conn: sqlite3.Connection, payload: dict) -> None:
+    conn.execute(
+        "insert into pending_snapshots (payload, created_at) values (?, ?)",
+        (json.dumps(payload), datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
+def dequeue_batch(conn: sqlite3.Connection, limit: int = 10) -> list[tuple[int, dict, int]]:
+    rows = conn.execute(
+        "select id, payload, attempts from pending_snapshots order by id asc limit ?",
+        (limit,),
+    ).fetchall()
+    return [(row[0], json.loads(row[1]), row[2]) for row in rows]
+
+
+def remove(conn: sqlite3.Connection, row_id: int) -> None:
+    conn.execute("delete from pending_snapshots where id = ?", (row_id,))
+    conn.commit()
+
+
+def bump_attempts(conn: sqlite3.Connection, row_id: int) -> None:
+    conn.execute("update pending_snapshots set attempts = attempts + 1 where id = ?", (row_id,))
+    conn.commit()
+
+
+def read_bacnet() -> dict:
+    if not ENABLE_BACNET:
+        return {}
+    try:
+        import BAC0
+
+        bacnet = BAC0.lite(ip=BACNET_IP)
+        # Placeholder — map device points in production deployment
+        return {}
+    except Exception:
+        return {}
+
+
 def read_local_sensors() -> dict:
-    """Read BACnet/Modbus when available; otherwise return None to skip."""
-    readings: dict = {}
+    """Read BACnet/Modbus when available; otherwise return empty dict."""
+    readings: dict = read_bacnet()
+
     try:
         from pymodbus.client import ModbusTcpClient
 
@@ -77,26 +140,76 @@ def read_local_sensors() -> dict:
     }
 
 
-def push_snapshot(payload: dict) -> bool:
+def _headers() -> dict:
     headers = {"Content-Type": "application/json"}
     if API_KEY:
         headers["X-API-Key"] = API_KEY
+    return headers
+
+
+def push_snapshot(payload: dict) -> bool:
+    backoff = 1.0
+    for attempt in range(MAX_RETRIES):
+        try:
+            r = httpx.post(
+                f"{API_URL}/api/v1/ingest/live",
+                json=payload,
+                headers=_headers(),
+                timeout=15.0,
+            )
+            if r.status_code == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(min(backoff, 30))
+        backoff *= 2
+    return False
+
+
+def send_heartbeat() -> None:
     try:
-        r = httpx.post(f"{API_URL}/api/v1/ingest/live", json=payload, headers=headers, timeout=15.0)
-        return r.status_code == 200
+        httpx.get(f"{API_URL}/api/v1/ingest/status", timeout=10.0)
     except Exception:
-        return False
+        pass
+
+
+def flush_queue(conn: sqlite3.Connection) -> None:
+    for row_id, payload, attempts in dequeue_batch(conn):
+        if push_snapshot(payload):
+            remove(conn, row_id)
+        else:
+            bump_attempts(conn, row_id)
+            if attempts + 1 >= MAX_RETRIES:
+                remove(conn, row_id)
 
 
 def main() -> None:
-    print(f"BuildOpt edge agent → {API_URL} building={BUILDING_ID}")
+    print(f"BuildOpt edge agent → {API_URL} building={BUILDING_ID} bacnet={ENABLE_BACNET}")
+    conn = init_queue()
+    heartbeat_counter = 0
+
     while True:
+        send_heartbeat()
+        flush_queue(conn)
+
         payload = read_local_sensors()
         if payload:
             ok = push_snapshot(payload)
-            print(f"{datetime.now(timezone.utc).isoformat()} push={'ok' if ok else 'fail'} hvac_kw={payload['hvac']['power_kw']}")
+            if not ok:
+                enqueue(conn, payload)
+            print(
+                f"{datetime.now(timezone.utc).isoformat()} push={'ok' if ok else 'queued'} "
+                f"hvac_kw={payload['hvac']['power_kw']}"
+            )
         else:
             print(f"{datetime.now(timezone.utc).isoformat()} no local sensor data (BACnet/Modbus unreachable)")
+
+        heartbeat_counter += 1
+        if heartbeat_counter % 10 == 0:
+            pending = conn.execute("select count(*) from pending_snapshots").fetchone()[0]
+            if pending:
+                print(f"Queue depth: {pending} pending snapshots")
+
         time.sleep(POLL_SECONDS)
 
 

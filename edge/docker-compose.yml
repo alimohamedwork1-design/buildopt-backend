@@ -8,3 +8,22 @@ services:
     env_file: .env
     network_mode: host
     restart: unless-stopped
+    volumes:
+      - edge-queue:/data
+
+  edge-agent-bacnet:
+    build:
+      context: ..
+      dockerfile: edge/Dockerfile.bacnet
+    env_file: .env
+    network_mode: host
+    restart: unless-stopped
+    profiles:
+      - bacnet
+    volumes:
+      - edge-queue:/data
+    environment:
+      ENABLE_BACNET: "true"
+
+volumes:
+  edge-queue:

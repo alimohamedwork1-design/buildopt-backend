@@ -126,6 +126,39 @@ class InfluxService:
         except Exception:
             return []
 
+    def query_hourly_kw(self, building_id: str, hours: int = 24) -> List[Dict[str, Any]]:
+        """Return hourly average total_kw for forecast/savings derivation."""
+        if self.demo_mode or self._client is None:
+            return []
+
+        try:
+            start = f"-{hours}h"
+            flux = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: {start})
+              |> filter(fn: (r) => r["building_id"] == "{building_id}")
+              |> filter(fn: (r) => r["_field"] == "value")
+              |> filter(fn: (r) => r["_measurement"] == "total_kw" or r["_measurement"] == "hvac_kw")
+              |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
+            '''
+            tables = self._client.query_api().query(flux, org=self.org)
+            results: List[Dict[str, Any]] = []
+            for table in tables:
+                for record in table.records:
+                    ts = record.get_time()
+                    if ts and ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    results.append(
+                        {
+                            "timestamp": ts,
+                            "value": float(record.get_value()),
+                            "metric": record.get_measurement(),
+                        }
+                    )
+            return sorted(results, key=lambda r: r["timestamp"])
+        except Exception:
+            return []
+
     def get_latest_snapshot(self, building_id: str) -> Optional[LiveBuildingData]:
         if self.demo_mode or self._client is None:
             return None

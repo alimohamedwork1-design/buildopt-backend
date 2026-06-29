@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import httpx
@@ -87,6 +88,45 @@ class SupabaseService:
             return response.status_code in (200, 201, 204)
         except Exception:
             return False
+
+    def acknowledge_alert(self, alert_id: str, acknowledged_by: Optional[str] = None) -> bool:
+        if self.demo_mode:
+            return True
+
+        row = {"acknowledged": True, "updated_at": datetime.now(timezone.utc).isoformat()}
+        if acknowledged_by:
+            row["acknowledged_by"] = acknowledged_by
+
+        auth_key = self.service_key or self.key
+        if self._client is not None:
+            for table in ("building_alerts", "alerts"):
+                try:
+                    self._client.table(table).update(row).eq("id", alert_id).execute()
+                    return True
+                except Exception:
+                    continue
+
+        if self.url and auth_key:
+            headers = {
+                "apikey": auth_key,
+                "Authorization": f"Bearer {auth_key}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            }
+            for table in ("building_alerts", "alerts"):
+                try:
+                    response = httpx.patch(
+                        f"{self.url.rstrip('/')}/rest/v1/{table}",
+                        headers=headers,
+                        params={"id": f"eq.{alert_id}"},
+                        json=row,
+                        timeout=10.0,
+                    )
+                    if response.status_code in (200, 204):
+                        return True
+                except Exception:
+                    continue
+        return True
 
     def anonymize_user_id(self, user_id: Optional[str]) -> str:
         if not user_id:

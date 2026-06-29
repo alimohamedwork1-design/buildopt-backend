@@ -8,8 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.data.modules_registry import get_category
-from app.services import demo_mode, live_data_service
-from app.utils.dewa_tariff import calculate_dewa_tariff
+from app.services import live_data_service
 from app.utils.gcc_features import get_ramadan_mode
 
 
@@ -47,6 +46,9 @@ async def get_module_data(slug: str, building_id: str = "burj-khalifa-01") -> Di
     rng = _seed(f"{slug}-{building_id}")
     now = datetime.now(timezone.utc)
 
+    live_data = await live_data_service.get_live_data(building_id)
+    is_demo = live_data is None or live_data.demo_mode
+
     payload: Dict[str, Any] = {
         "slug": slug or "overview",
         "path": f"/{slug}" if slug else "/",
@@ -55,13 +57,15 @@ async def get_module_data(slug: str, building_id: str = "burj-khalifa-01") -> Di
         "timestamp": now.isoformat(),
         "fetched_at": now.isoformat().replace("+00:00", "Z"),
         "metric_cards": _metric_cards(rng, category),
-        "demo_mode": True,
+        "demo_mode": is_demo,
     }
 
-    live_data = await live_data_service.get_live_data(building_id)
     if live_data:
         payload["live"] = live_data.model_dump(mode="json")
         payload["demo_mode"] = live_data.demo_mode
+        if not live_data.demo_mode:
+            payload["metric_cards"] = _live_metric_cards(live_data, category)
+            payload["charts"] = _live_charts(live_data, building_id)
 
     if category in ("overview", "telemetry", "equipment", "optimization"):
         payload["equipment"] = [e.model_dump(mode="json") for e in live_data_service.list_equipment(building_id)]
@@ -73,7 +77,7 @@ async def get_module_data(slug: str, building_id: str = "burj-khalifa-01") -> Di
         payload["forecast"] = live_data_service.get_energy_forecast(building_id).model_dump(mode="json")
 
     if category in ("energy", "gcc", "financial"):
-        payload["dewa_tariff"] = calculate_dewa_tariff(52000, 34000, 950).model_dump(mode="json")
+        payload["dewa_tariff"] = live_data_service.get_dewa_tariff().model_dump(mode="json")
 
     if category in ("alerts", "fault_prediction", "overview"):
         payload["alerts"] = [a.model_dump(mode="json") for a in live_data_service.list_alerts()]
@@ -87,11 +91,80 @@ async def get_module_data(slug: str, building_id: str = "burj-khalifa-01") -> Di
         if metrics:
             payload["metrics_24h"] = metrics.model_dump(mode="json")
 
-    payload["recommendations"] = _recommendations(rng, category)
-    payload["recent_activity"] = _activity(rng, category)
-    payload["charts"] = _charts(rng, category)
+    if is_demo:
+        payload["recommendations"] = _recommendations(rng, category)
+        payload["recent_activity"] = _activity(rng, category)
+        if "charts" not in payload:
+            payload["charts"] = _charts(rng, category)
+    else:
+        payload["recommendations"] = _live_recommendations(live_data, category)
+        payload["recent_activity"] = _live_activity(live_data, category)
+        if "charts" not in payload:
+            payload["charts"] = _charts(rng, category)
 
     return payload
+
+
+def _live_metric_cards(live, category: str) -> List[Dict[str, Any]]:
+    cards = [
+        {"label": "Peak kW", "unit": "kW", "value": round(live.energy.total_kw, 1), "trend_pct": 0},
+        {"label": "HVAC COP", "unit": "", "value": live.hvac.cop, "trend_pct": 0},
+        {"label": "CO₂", "unit": "ppm", "value": live.environment.co2_ppm, "trend_pct": 0},
+        {"label": "Alerts", "unit": "", "value": live.active_alerts, "trend_pct": 0},
+    ]
+    if category == "energy":
+        cards[0] = {"label": "Cost/hr", "unit": "AED", "value": live.energy.cost_per_hour, "trend_pct": 0}
+    return cards
+
+
+def _live_charts(live, building_id: str) -> Dict[str, Any]:
+    metrics = live_data_service.get_building_metrics(building_id, "24h")
+    energy_kwh = []
+    if metrics and metrics.metrics:
+        for point in metrics.metrics[:24]:
+            energy_kwh.append(
+                {
+                    "hour": point.timestamp.hour if hasattr(point.timestamp, "hour") else 0,
+                    "actual": round(point.value, 1),
+                    "predicted": round(point.value * 1.02, 1),
+                }
+            )
+    if not energy_kwh:
+        hour = datetime.now(timezone.utc).hour
+        energy_kwh = [
+            {"hour": h, "actual": round(live.energy.total_kw * 0.9, 0), "predicted": round(live.energy.total_kw, 0)}
+            for h in range(max(0, hour - 12), hour + 1)
+        ]
+    return {
+        "energy_kwh": energy_kwh,
+        "optimization_score": [{"hour": i, "score": 85} for i in range(0, 24, 2)],
+    }
+
+
+def _live_recommendations(live, category: str) -> List[Dict[str, Any]]:
+    recs = []
+    if live.hvac.cop < 3.5:
+        recs.append({"priority": "HIGH", "title": "Chiller COP below target", "savings_aed_per_month": 240, "category": category})
+    if live.environment.co2_ppm > 800:
+        recs.append({"priority": "MED", "title": "Increase ventilation — CO₂ elevated", "savings_aed_per_month": 45, "category": category})
+    if not recs:
+        recs.append({"priority": "LOW", "title": "System operating within normal range", "savings_aed_per_month": 0, "category": category})
+    return recs
+
+
+def _live_activity(live, category: str) -> List[Dict[str, Any]]:
+    return [
+        {
+            "message": f"Live snapshot: {live.energy.total_kw:.0f} kW total demand",
+            "minutes_ago": 0,
+            "category": category,
+        },
+        {
+            "message": f"HVAC COP {live.hvac.cop} · Supply air {live.hvac.supply_air_temp}°C",
+            "minutes_ago": 1,
+            "category": category,
+        },
+    ]
 
 
 def _recommendations(rng: random.Random, category: str) -> List[Dict[str, Any]]:

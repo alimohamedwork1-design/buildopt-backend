@@ -22,6 +22,13 @@ async def lifespan(app: FastAPI):
     install_log_handler()
     await connection_store.load_metasys_from_supabase()
 
+    if settings.app_env.lower() in ("production", "prod") and not settings.ingest_api_key:
+        log_event(
+            "warning",
+            "INGEST_API_KEY unset in production — ingest endpoint will reject requests",
+            "مفتاح INGEST_API_KEY غير مُعد في الإنتاج",
+        )
+
     if settings.demo_mode:
         seed_demo_jobs()
 

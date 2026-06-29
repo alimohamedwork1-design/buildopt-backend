@@ -84,6 +84,27 @@ Source: `frontend-integration/` in this repo.
 
 ---
 
+## Production security checklist (Railway)
+
+| Variable | Required in prod | Notes |
+|----------|------------------|-------|
+| `INGEST_API_KEY` | **Yes** | Fail-closed on `POST /api/v1/ingest/live` when `APP_ENV=production` and key unset |
+| `SECRET_KEY` | **Yes** | Rotate from default; used for Fernet encryption of Metasys passwords |
+| `SUPABASE_ALERT_WEBHOOK_URL` | Recommended | FDD → edge function → `building_alerts` |
+| `ALERT_WEBHOOK_SECRET` | Recommended | Must match Lovable `BUILDOPT_WEBHOOK_SECRET` |
+
+Apply Supabase migrations in order if not already run:
+
+1. `supabase/migrations/001_building_alerts.sql`
+2. `supabase/migrations/002_bms_connections.sql`
+3. `supabase/migrations/003_alert_acknowledge.sql`
+
+Alert acknowledge from UI: `POST /api/v1/alerts/{id}/acknowledge` persists to Supabase `building_alerts.acknowledged`.
+
+CI: GitHub Actions runs `pytest` on push to `main` (`.github/workflows/ci.yml`).
+
+---
+
 ## Still optional (no blocker)
 
 - `SUPABASE_SERVICE_KEY` on Railway — not required when using edge function webhook

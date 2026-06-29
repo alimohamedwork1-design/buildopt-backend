@@ -21,8 +21,8 @@ async def alert_history() -> List[Alert]:
 
 @router.post("/{alert_id}/acknowledge")
 async def acknowledge_alert(alert_id: str, payload: AlertAcknowledge) -> dict:
-    alerts = live_data_service.list_alerts()
-    if not any(alert.id == alert_id for alert in alerts):
+    ok = live_data_service.acknowledge_alert(alert_id, payload.acknowledged_by)
+    if not ok:
         raise HTTPException(status_code=404, detail=bilingual_error("Alert not found", "التنبيه غير موجود"))
 
     return {

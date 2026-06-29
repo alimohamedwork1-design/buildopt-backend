@@ -2,9 +2,11 @@ FROM python:3.11-slim
 
 WORKDIR /edge
 
-RUN pip install --no-cache-dir httpx pymodbus==3.6.3
+RUN pip install --no-cache-dir httpx pymodbus==3.6.3 BAC0
 
 COPY edge/agent.py .
+
+ENV ENABLE_BACNET=true
 
 VOLUME ["/data"]
 
