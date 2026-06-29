@@ -22,6 +22,11 @@ FDD_RULES: List[Dict[str, Any]] = [
     {"id": "FDD-018", "category": "BMS", "check": "communication_loss", "threshold": 1},
     {"id": "FDD-019", "category": "Energy", "check": "baseline_deviation", "threshold": 15.0},
     {"id": "FDD-020", "category": "Energy", "check": "peak_demand_spike", "threshold": 1},
+    {"id": "FDD-022", "category": "Refrigeration", "check": "high_superheat", "threshold": 10.0},
+    {"id": "FDD-023", "category": "Refrigeration", "check": "low_superheat_floodback", "threshold": 3.0},
+    {"id": "FDD-024", "category": "Refrigeration", "check": "box_temp_drift", "threshold": 2.0},
+    {"id": "FDD-025", "category": "Refrigeration", "check": "nh3_leak", "threshold": 25.0},
+    {"id": "FDD-026", "category": "Refrigeration", "check": "compressor_short_cycle", "threshold": 1},
 ]
 
 
@@ -53,6 +58,20 @@ class FaultDetector:
         if readings.get("power_factor", 0.9) < 0.85:
             faults.append(self._fault("FDD-021", "Energy", "Power factor below 0.85", now))
 
+        sh = readings.get("superheat_k", readings.get("superheat", 8.0))
+        if sh > 10.0:
+            faults.append(self._fault("FDD-022", "Refrigeration", "High superheat — possible refrigerant starvation", now, severity="warning"))
+        if 0 < sh < 3.0:
+            faults.append(self._fault("FDD-023", "Refrigeration", "Low superheat — floodback risk", now, severity="critical"))
+        box_drift = readings.get("box_temp_drift_c", readings.get("evap_temp_drift", 0))
+        if box_drift > 2.0:
+            faults.append(self._fault("FDD-024", "Refrigeration", "Cold room temp drift exceeds setpoint band", now))
+        nh3 = readings.get("nh3_ppm", 0)
+        if nh3 > 25.0:
+            faults.append(self._fault("FDD-025", "Refrigeration", "NH₃ leak detected above safety threshold", now, severity="critical"))
+        if readings.get("compressor_short_cycles_per_hr", 0) > 6:
+            faults.append(self._fault("FDD-026", "Refrigeration", "Compressor short-cycling detected", now))
+
         if self.demo_mode and not faults:
             from app.services import demo_mode as demo
 
@@ -60,13 +79,13 @@ class FaultDetector:
 
         return faults
 
-    def _fault(self, rule_id: str, category: str, description: str, detected_at: datetime) -> Dict[str, Any]:
+    def _fault(self, rule_id: str, category: str, description: str, detected_at: datetime, severity: str = "warning") -> Dict[str, Any]:
         return {
             "rule_id": rule_id,
             "category": category,
             "description": description,
             "description_ar": "تم اكتشاف عطل في النظام",
-            "severity": "warning",
+            "severity": severity,
             "confidence": 0.87,
             "detected_at": detected_at.isoformat(),
         }

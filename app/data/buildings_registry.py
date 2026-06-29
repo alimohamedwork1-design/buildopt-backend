@@ -17,6 +17,8 @@ BUILDING_REGISTRY: List[Dict[str, Any]] = [
             "hvac_power_kw": "obj-1010",
             "total_kw": "obj-1020",
         },
+        "refrigeration_objects": {},
+        "refrigeration_connection": {"source": "modbus", "host": "192.168.1.101", "port": 502, "poll_interval_seconds": 60},
         "bacnet_points": [],
         "modbus_registers": [],
     },

@@ -1,0 +1,10 @@
+{
+  "burj-khalifa-01": {
+    "suction_pressure_bar": { "address": 40001, "scale": 0.01, "unit": "bar" },
+    "discharge_pressure_bar": { "address": 40002, "scale": 0.01, "unit": "bar" },
+    "evap_temp_c": { "address": 40003, "scale": 0.1, "unit": "degC" },
+    "superheat_k": { "address": 40004, "scale": 0.1, "unit": "K" },
+    "compressor_kw": { "address": 40005, "scale": 0.1, "unit": "kW" },
+    "refrig_cop": { "address": 40006, "scale": 0.01, "unit": "" }
+  }
+}

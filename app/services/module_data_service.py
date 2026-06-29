@@ -102,6 +102,11 @@ async def get_module_data(slug: str, building_id: str = "burj-khalifa-01") -> Di
         if "charts" not in payload:
             payload["charts"] = _charts(rng, category)
 
+    if slug == "industrial-refrigeration":
+        refrig = await live_data_service.get_refrigeration_snapshot(building_id)
+        if refrig:
+            payload["refrigeration"] = refrig
+
     return payload
 
 

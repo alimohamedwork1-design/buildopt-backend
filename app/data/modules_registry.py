@@ -15,7 +15,7 @@ MODULE_CATEGORIES: Dict[str, List[str]] = {
     "optimization": ["optimization", "autopilot", "whatif", "digital-twin", "demand-response", "occupancy"],
     "energy": [
         "utility-rate", "tariff-intelligence", "dewa-hub", "metering-reconciliation",
-        "anomaly-heatmap", "energy-genome", "chiller", "solar-pv", "demand-shield",
+        "anomaly-heatmap", "energy-genome", "chiller", "industrial-refrigeration", "solar-pv", "demand-shield",
     ],
     "equipment": ["equipment", "integration", "commissioning", "data-health", "system-status"],
     "gcc": [

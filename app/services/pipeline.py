@@ -65,6 +65,9 @@ async def run_poll_cycle() -> None:
             data = await get_live_data(building_id)
             if data:
                 live_cache.set_live(building_id, data)
+        from app.services.refrigeration_poll import poll_all_buildings
+
+        await poll_all_buildings(include_demo=True)
         log_event("info", f"Sensor poll cycle complete: {len(get_building_ids())} buildings", "اكتمل استطلاع المستشعرات")
         return
 
@@ -79,6 +82,9 @@ async def run_poll_cycle() -> None:
     fault_detector = FaultDetector(demo_mode=False)
 
     metasys_polled = await poll_metasys_buildings()
+    from app.services.refrigeration_poll import poll_all_buildings
+
+    refrig_polled = await poll_all_buildings()
     all_alerts: List[Alert] = list(live_cache.get_alerts())
 
     for cfg in BUILDING_REGISTRY:
@@ -102,6 +108,16 @@ async def run_poll_cycle() -> None:
             "baseline_deviation_pct": 0,
             "filter_pressure_pa": 100,
         }
+        from app.services.refrigeration_poll import get_cached_snapshot
+
+        refrig = get_cached_snapshot(building_id)
+        if refrig and refrig.get("readings"):
+            r = refrig["readings"]
+            readings["superheat_k"] = r.get("superheat_k", 8.0)
+            readings["superheat"] = readings["superheat_k"]
+            readings["nh3_ppm"] = r.get("nh3_ppm", 0)
+            readings["evap_temp_drift"] = abs(r.get("evap_temp_c", -18) - (-18))
+            readings["box_temp_drift_c"] = readings["evap_temp_drift"]
         faults = fault_detector.evaluate(readings)
         for fault in faults:
             alert = Alert(
@@ -166,6 +182,16 @@ async def run_fdd_cycle() -> None:
             "filter_pressure_pa": 180 if live.hvac.cop < 3.5 else 90,
             "power_factor": 0.88,
         }
+        from app.services.refrigeration_poll import get_cached_snapshot
+
+        refrig = get_cached_snapshot(building_id)
+        if refrig and refrig.get("readings"):
+            r = refrig["readings"]
+            readings["superheat_k"] = r.get("superheat_k", 8.0)
+            readings["superheat"] = readings["superheat_k"]
+            readings["nh3_ppm"] = r.get("nh3_ppm", 0)
+            readings["evap_temp_drift"] = abs(r.get("evap_temp_c", -18) - (-18))
+            readings["box_temp_drift_c"] = readings["evap_temp_drift"]
         for fault in fault_detector.evaluate(readings):
             fdd = _fault_to_fdd(fault, building_id)
             if not any(r.rule_id == fdd.rule_id and r.equipment_id == fdd.equipment_id for r in results):

@@ -1,0 +1,9 @@
+{
+  "burj-khalifa-01": {
+    "suction_pressure_bar": { "object_id": "analog-input,1", "unit": "bar" },
+    "discharge_pressure_bar": { "object_id": "analog-input,2", "unit": "bar" },
+    "evap_temp_c": { "object_id": "analog-input,3", "unit": "degC" },
+    "superheat_k": { "object_id": "analog-input,4", "unit": "K" },
+    "compressor_kw": { "object_id": "analog-input,5", "unit": "kW" }
+  }
+}

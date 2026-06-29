@@ -91,8 +91,12 @@ async def network_diagnostic(body: JCIConnectionRequest) -> Dict[str, Any]:
 
 
 @router.get("/logical-keys")
-async def list_logical_keys() -> Dict[str, Any]:
-    return {"logical_keys": LOGICAL_KEYS}
+async def list_logical_keys(domain: str = "hvac") -> Dict[str, Any]:
+    if domain == "refrigeration":
+        from app.services.refrigeration_auto_mapper import REFRIGERATION_LOGICAL_KEYS
+
+        return {"domain": "refrigeration", "logical_keys": REFRIGERATION_LOGICAL_KEYS}
+    return {"domain": "hvac", "logical_keys": LOGICAL_KEYS}
 
 
 @router.post("/auto-connect")

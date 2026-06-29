@@ -484,3 +484,13 @@ def ingest_live_snapshot(data: LiveBuildingData) -> None:
     influx.write_point("temp_c", data.environment.temp_c, tags)
     influx.write_point("co2_ppm", float(data.environment.co2_ppm), tags)
     influx.write_point("cop", data.hvac.cop, tags)
+
+
+async def get_refrigeration_snapshot(building_id: str) -> Optional[Dict[str, Any]]:
+    """Latest industrial refrigeration telemetry for a building."""
+    from app.services.refrigeration_poll import get_cached_snapshot, poll_building
+
+    cached = get_cached_snapshot(building_id)
+    if cached:
+        return cached
+    return await poll_building(building_id)
