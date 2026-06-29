@@ -53,6 +53,7 @@ async def get_module_data(slug: str, building_id: str = "burj-khalifa-01") -> Di
         "category": category,
         "building_id": building_id,
         "timestamp": now.isoformat(),
+        "fetched_at": now.isoformat().replace("+00:00", "Z"),
         "metric_cards": _metric_cards(rng, category),
         "demo_mode": True,
     }

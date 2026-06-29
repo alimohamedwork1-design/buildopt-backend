@@ -30,6 +30,8 @@ def test_health_protocols_v2(client):
     assert data["overall_health"] in ("healthy", "degraded")
     metasys = next(p for p in data["protocols"] if p["name"] == "Metasys REST")
     assert metasys["status"] == "connected"
+    assert metasys.get("key") == "metasys"
+    assert data.get("jci_metasys") == "connected"
 
 
 def test_health_history(client):
@@ -38,6 +40,7 @@ def test_health_history(client):
     data = response.json()
     assert data["interval_minutes"] == 5
     assert len(data["data"]) >= 100
+    assert data["history"] == data["data"]
     point = data["data"][0]
     assert "timestamp" in point
     assert "response_ms" in point

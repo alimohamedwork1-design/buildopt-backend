@@ -26,6 +26,125 @@ def _uptime_seconds() -> int:
     return int((datetime.now(timezone.utc) - _app_started_at).total_seconds())
 
 
+def _protocol_items(settings, creds, now: datetime) -> list[dict]:
+    if settings.demo_mode:
+        metasys_last = now - timedelta(seconds=12)
+        influx_last = now - timedelta(seconds=7)
+        supabase_last = now - timedelta(seconds=3)
+        return [
+            {
+                "key": "metasys",
+                "name": "Metasys REST",
+                "status": "connected",
+                "last_seen": metasys_last.isoformat().replace("+00:00", "Z"),
+                "last_seen_human": human_ago(metasys_last),
+                "data_points": 847,
+                "response_ms": 145,
+            },
+            {
+                "key": "influxdb",
+                "name": "InfluxDB",
+                "status": "connected",
+                "last_seen": influx_last.isoformat().replace("+00:00", "Z"),
+                "last_seen_human": human_ago(influx_last),
+                "data_points": 12450,
+                "write_rate": "120 pts/min",
+            },
+            {
+                "key": "supabase",
+                "name": "Supabase",
+                "status": "connected",
+                "last_seen": supabase_last.isoformat().replace("+00:00", "Z"),
+                "last_seen_human": "realtime",
+                "alerts_count": len(list_alerts()),
+            },
+            {
+                "key": "bacnet",
+                "name": "BACnet",
+                "status": "not_configured",
+                "last_seen": None,
+                "data_points": 0,
+            },
+            {
+                "key": "modbus",
+                "name": "Modbus",
+                "status": "not_configured",
+                "last_seen": None,
+                "data_points": 0,
+            },
+        ]
+
+    influx = get_influx_service()
+    supabase = get_supabase_service()
+    jci = JCIMetasysClient(
+        creds.host,
+        creds.username,
+        creds.password,
+        creds.version,
+        demo_mode=False,
+    )
+    metasys_status = "connected" if jci.status() == "ready" else "disconnected"
+    if not creds.host:
+        metasys_status = "not_configured"
+    influx_status = "connected" if influx.status() == "connected" else "disconnected"
+    supabase_status = "connected" if supabase.status() in ("connected", "webhook") else "disconnected"
+
+    return [
+        {
+            "key": "metasys",
+            "name": "Metasys REST",
+            "status": metasys_status,
+            "last_seen": creds.last_connected_at.isoformat().replace("+00:00", "Z")
+            if creds.last_connected_at
+            else None,
+            "last_seen_human": human_ago(creds.last_connected_at) if creds.last_connected_at else None,
+            "data_points": 847 if metasys_status == "connected" else 0,
+            "response_ms": 145,
+        },
+        {
+            "key": "influxdb",
+            "name": "InfluxDB",
+            "status": influx_status,
+            "last_seen": now.isoformat().replace("+00:00", "Z"),
+            "last_seen_human": human_ago(now),
+            "data_points": 0,
+            "write_rate": "0 pts/min",
+        },
+        {
+            "key": "supabase",
+            "name": "Supabase",
+            "status": supabase_status,
+            "last_seen": now.isoformat().replace("+00:00", "Z"),
+            "last_seen_human": "realtime",
+            "alerts_count": len(list_alerts()),
+        },
+        {
+            "key": "bacnet",
+            "name": "BACnet",
+            "status": "not_configured" if not settings.bacnet_ip else "ready",
+            "last_seen": None,
+            "data_points": 0,
+        },
+        {
+            "key": "modbus",
+            "name": "Modbus",
+            "status": "not_configured" if not settings.modbus_host else "ready",
+            "last_seen": None,
+            "data_points": 0,
+        },
+    ]
+
+
+def _legacy_protocol_fields(protocols: list[dict]) -> dict:
+    by_key = {item.get("key", ""): item.get("status", "not_configured") for item in protocols}
+    return {
+        "bacnet": by_key.get("bacnet", "not_configured"),
+        "modbus": by_key.get("modbus", "not_configured"),
+        "mqtt": "not_configured",
+        "jci_metasys": by_key.get("metasys", "not_configured"),
+    }
+
+
 def _compute_health_score(settings) -> tuple[int, str, str]:
     score = 100
     influx = get_influx_service()
@@ -122,112 +241,16 @@ async def protocol_health() -> dict:
     settings = get_settings()
     now = datetime.now(timezone.utc)
     creds = connection_store.get_metasys()
-
-    if settings.demo_mode:
-        metasys_last = now - timedelta(seconds=12)
-        influx_last = now - timedelta(seconds=7)
-        supabase_last = now - timedelta(seconds=3)
-        return {
-            "protocols": [
-                {
-                    "name": "Metasys REST",
-                    "status": "connected",
-                    "last_seen": metasys_last.isoformat().replace("+00:00", "Z"),
-                    "last_seen_human": human_ago(metasys_last),
-                    "data_points": 847,
-                    "response_ms": 145,
-                },
-                {
-                    "name": "InfluxDB",
-                    "status": "connected",
-                    "last_seen": influx_last.isoformat().replace("+00:00", "Z"),
-                    "last_seen_human": human_ago(influx_last),
-                    "data_points": 12450,
-                    "write_rate": "120 pts/min",
-                },
-                {
-                    "name": "Supabase",
-                    "status": "connected",
-                    "last_seen": supabase_last.isoformat().replace("+00:00", "Z"),
-                    "last_seen_human": "realtime",
-                    "alerts_count": len(list_alerts()),
-                },
-                {
-                    "name": "BACnet",
-                    "status": "not_configured",
-                    "last_seen": None,
-                    "data_points": 0,
-                },
-                {
-                    "name": "Modbus",
-                    "status": "not_configured",
-                    "last_seen": None,
-                    "data_points": 0,
-                },
-            ],
-            "overall_health": "healthy",
-            "timestamp": now.isoformat().replace("+00:00", "Z"),
-        }
-
-    influx = get_influx_service()
-    supabase = get_supabase_service()
-    jci = JCIMetasysClient(
-        creds.host,
-        creds.username,
-        creds.password,
-        creds.version,
-        demo_mode=False,
-    )
-
-    metasys_status = "connected" if jci.status() == "ready" else "disconnected"
-    if not creds.host:
-        metasys_status = "not_configured"
-
-    influx_status = "connected" if influx.status() == "connected" else "disconnected"
-    supabase_status = "connected" if supabase.status() in ("connected", "webhook") else "disconnected"
-
+    protocols = _protocol_items(settings, creds, now)
+    legacy = _legacy_protocol_fields(protocols)
+    overall = "healthy"
+    if any(p.get("status") == "disconnected" for p in protocols):
+        overall = "degraded"
     return {
-        "protocols": [
-            {
-                "name": "Metasys REST",
-                "status": metasys_status,
-                "last_seen": creds.last_connected_at.isoformat().replace("+00:00", "Z")
-                if creds.last_connected_at
-                else None,
-                "last_seen_human": human_ago(creds.last_connected_at) if creds.last_connected_at else None,
-                "data_points": 847 if metasys_status == "connected" else 0,
-                "response_ms": 145,
-            },
-            {
-                "name": "InfluxDB",
-                "status": influx_status,
-                "last_seen": now.isoformat().replace("+00:00", "Z"),
-                "last_seen_human": human_ago(now),
-                "data_points": 0,
-                "write_rate": "0 pts/min",
-            },
-            {
-                "name": "Supabase",
-                "status": supabase_status,
-                "last_seen": now.isoformat().replace("+00:00", "Z"),
-                "last_seen_human": "realtime",
-                "alerts_count": len(list_alerts()),
-            },
-            {
-                "name": "BACnet",
-                "status": "not_configured" if not settings.bacnet_ip else "ready",
-                "last_seen": None,
-                "data_points": 0,
-            },
-            {
-                "name": "Modbus",
-                "status": "not_configured" if not settings.modbus_host else "ready",
-                "last_seen": None,
-                "data_points": 0,
-            },
-        ],
-        "overall_health": "healthy" if metasys_status != "disconnected" else "degraded",
+        "protocols": protocols,
+        "overall_health": overall,
         "timestamp": now.isoformat().replace("+00:00", "Z"),
+        **legacy,
     }
 
 
@@ -260,6 +283,7 @@ async def health_history(hours: int = Query(default=24, ge=1, le=168)) -> dict:
         "interval_minutes": 5,
         "demo_mode": settings.demo_mode,
         "data": data,
+        "history": data,
     }
 
 
