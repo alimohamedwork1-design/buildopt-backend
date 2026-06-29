@@ -78,7 +78,22 @@ export const getSandstormAlert = () => request<SandstormAlert>("/gcc/sandstorm-a
 // ── Health ───────────────────────────────────────────────────────────────────
 export const getHealth = () => request<HealthResponse>("/health");
 export const getConnections = () => request<ConnectionsResponse>("/health/connections");
-export const getProtocolStatus = () => request<ProtocolStatus>("/health/protocols");
+export const getProtocolHealth = () => request<ProtocolHealthResponse>("/health/protocols");
+export const getHealthHistory = (hours = 24) => request<HealthHistoryResponse>(`/health/history?hours=${hours}`);
+export const getHealthLogs = (limit = 10) => request<HealthLogsResponse>(`/health/logs?limit=${limit}`);
+export const getHealthPipeline = () => request<HealthPipelineResponse>("/health/pipeline");
+export const testAlertWebhook = () => request<WebhookTestResponse>("/health/alert-webhook/test", { method: "POST" });
+
+// ── JCI Metasys ──────────────────────────────────────────────────────────────
+export const testJciConnection = (body: JciConnectionRequest) =>
+  request<JciConnectionResult>("/jci/test-connection", { method: "POST", body: JSON.stringify(body) });
+export const saveJciCredentials = (body: JciConnectionRequest) =>
+  request<JciSaveResult>("/jci/save-credentials", { method: "POST", body: JSON.stringify(body) });
+export const runJciNetworkDiagnostic = (body: JciConnectionRequest) =>
+  request<JciDiagnosticResult>("/jci/network-diagnostic", { method: "POST", body: JSON.stringify(body) });
+
+/** @deprecated use getProtocolHealth — V2 returns full protocol array */
+export const getProtocolStatus = () => getProtocolHealth();
 
 // ── Types ────────────────────────────────────────────────────────────────────
 export interface SiteMetadata {
@@ -140,8 +155,46 @@ export interface FDDResult { rule_id: string; category: string; description: str
 export interface PrayerTimes { date: string; location: string; times: Record<string, string> }
 export interface RamadanMode { active: boolean; hijri_date: string; schedule: unknown[] }
 export interface SandstormAlert { active: boolean; pm10: number; threshold: number; actions: string[] }
-export interface HealthResponse { status: string; version: string; demo_mode: boolean; timestamp: string }
-export interface ConnectionsResponse {
-  demo_mode: boolean; influxdb: string; supabase: string; alert_webhook: boolean; ingest_api: boolean;
+export interface HealthResponse {
+  status: string; version: string; demo_mode: boolean; timestamp: string;
+  health_score?: number; health_label?: string; health_label_ar?: string; uptime_seconds?: number;
 }
+export interface ConnectionsResponse {
+  demo_mode: boolean; influxdb: string; supabase: string; jci_metasys?: string;
+  alert_webhook: boolean; ingest_api: boolean; frontend?: string; api_url?: string;
+}
+export interface ProtocolHealthItem {
+  name: string; status: string; last_seen: string | null; last_seen_human?: string | null;
+  data_points?: number; response_ms?: number; write_rate?: string; alerts_count?: number;
+}
+export interface ProtocolHealthResponse {
+  protocols: ProtocolHealthItem[]; overall_health: string; timestamp: string;
+}
+export interface HealthHistoryResponse {
+  interval_minutes: number; demo_mode?: boolean;
+  data: { timestamp: string; response_ms: number; status: string }[];
+}
+export interface HealthLogsResponse {
+  logs: { timestamp: string; level: string; message: string; message_ar?: string }[];
+}
+export interface HealthPipelineResponse {
+  jobs: {
+    name: string; name_ar: string; interval: string; status: string;
+    last_run: string; last_run_human: string; next_run_human: string;
+  }[];
+}
+export interface WebhookTestResponse {
+  status: string; webhook_url?: string; http_status?: number; message?: string; demo_mode?: boolean;
+}
+export interface JciConnectionRequest { host: string; username: string; password: string; version?: string }
+export interface JciConnectionResult {
+  status: string; message?: string; response_ms?: number; server_version?: string;
+  ssl_valid?: boolean; demo?: boolean; error?: string; error_ar?: string;
+}
+export interface JciSaveResult { status: string; message: string; message_ar: string; supabase_persisted?: boolean }
+export interface JciDiagnosticResult {
+  checks: { step: string; status: string; detail: string }[];
+  overall: string; summary: string; summary_ar: string; demo?: boolean;
+}
+/** @deprecated V1 shape — use ProtocolHealthResponse */
 export interface ProtocolStatus { bacnet: string; modbus: string; mqtt: string; jci_metasys: string }

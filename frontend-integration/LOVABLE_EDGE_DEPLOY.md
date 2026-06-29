@@ -1,3 +1,14 @@
+# Paste into Lovable AI chat — deploy Supabase alert sync edge function
+
+Deploy the BMS alert webhook so Railway can push FDD alerts into Supabase **without** exposing `service_role` in the frontend or Railway env.
+
+---
+
+## 1. Create edge function
+
+Create **`supabase/functions/sync-bms-alert/index.ts`** with this exact code:
+
+```typescript
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -55,3 +66,59 @@ Deno.serve(async (req) => {
     });
   }
 });
+```
+
+---
+
+## 2. Add Lovable Cloud secret
+
+In **Lovable Cloud → Secrets** (NOT `.env`):
+
+```
+BUILDOPT_WEBHOOK_SECRET=buildopt-alert-sync-2026-secret
+```
+
+`SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_URL` are auto-injected for edge functions — do not copy them to `.env`.
+
+---
+
+## 3. Deploy the function
+
+Deploy `sync-bms-alert` via Lovable Supabase integration.
+
+Expected URL:
+```
+https://arddnpiluxrkndzzdpfi.supabase.co/functions/v1/sync-bms-alert
+```
+
+---
+
+## 4. Tell backend operator to set Railway vars
+
+After deploy, set on Railway (`buildopt-backend`):
+
+```
+SUPABASE_ALERT_WEBHOOK_URL=https://arddnpiluxrkndzzdpfi.supabase.co/functions/v1/sync-bms-alert
+ALERT_WEBHOOK_SECRET=buildopt-alert-sync-2026-secret
+```
+
+---
+
+## 5. Verify
+
+```bash
+curl -X POST https://buildopt-backend-production.up.railway.app/api/v1/health/alert-webhook/test
+```
+
+When `DEMO_MODE=false` on Railway, expect `"status":"ok"`.
+
+Manual probe (optional):
+
+```bash
+curl -X POST https://arddnpiluxrkndzzdpfi.supabase.co/functions/v1/sync-bms-alert \
+  -H "Content-Type: application/json" \
+  -H "x-buildopt-secret: buildopt-alert-sync-2026-secret" \
+  -d '{"id":"manual-test-1","building_id":"burj-khalifa-01","severity":"info","category":"test","title":"Manual test","message":"Hello","acknowledged":true}'
+```
+
+Do NOT add `service_role` to frontend `.env`. Edge function only.

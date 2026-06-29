@@ -365,3 +365,48 @@ async def health_pipeline() -> dict:
         )
 
     return {"jobs": formatted}
+
+
+@router.post("/alert-webhook/test")
+async def test_alert_webhook() -> dict:
+    """Probe Supabase edge function after deploy — verifies BUILDOPT_WEBHOOK_SECRET alignment."""
+    import uuid
+
+    settings = get_settings()
+    if not settings.supabase_alert_webhook_url:
+        return {
+            "status": "not_configured",
+            "message": "Set SUPABASE_ALERT_WEBHOOK_URL on Railway",
+            "demo_mode": settings.demo_mode,
+        }
+
+    if settings.demo_mode:
+        return {
+            "status": "skipped",
+            "message": "Webhook test skipped in DEMO_MODE (alerts are simulated)",
+            "webhook_url": settings.supabase_alert_webhook_url,
+            "demo_mode": True,
+        }
+
+    supabase = get_supabase_service()
+    test_alert = {
+        "id": f"webhook-test-{uuid.uuid4().hex[:8]}",
+        "building_id": "burj-khalifa-01",
+        "equipment_id": "test-chiller-01",
+        "severity": "info",
+        "category": "webhook_test",
+        "title": "BuildOpt webhook test",
+        "message": "Test alert from Railway backend coordination probe",
+        "message_ar": "تنبيه اختبار من Railway",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "acknowledged": True,
+    }
+    ok = supabase.push_alert(test_alert)
+    return {
+        "status": "ok" if ok else "failed",
+        "webhook_url": settings.supabase_alert_webhook_url,
+        "secret_configured": bool(settings.alert_webhook_secret),
+        "http_status": 200 if ok else 502,
+        "alert_id": test_alert["id"],
+        "demo_mode": False,
+    }

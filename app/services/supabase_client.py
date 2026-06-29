@@ -53,10 +53,12 @@ class SupabaseService:
         row = {
             "id": alert.get("id"),
             "building_id": alert.get("building_id"),
+            "equipment_id": alert.get("equipment_id"),
             "severity": alert.get("severity"),
             "category": alert.get("category"),
             "title": alert.get("title"),
             "message": alert.get("message"),
+            "message_ar": alert.get("message_ar"),
             "acknowledged": alert.get("acknowledged", False),
             "created_at": alert.get("timestamp"),
         }

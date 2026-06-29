@@ -21,10 +21,16 @@
 
 Paste into Lovable chat:
 
-### **`frontend-integration/LOVABLE_MASTER_INTEGRATION.md`**
+### **`frontend-integration/LOVABLE_INCREMENTAL_ROLLOUT.md`** (pages, incremental)
+
+Or full pass: **`frontend-integration/LOVABLE_MASTER_INTEGRATION.md`**
+
+For Supabase alert webhook only: **`frontend-integration/LOVABLE_EDGE_DEPLOY.md`**
+
+See **`BACKEND_COORDINATION.md`** for Railway webhook env vars + verification.
 
 This configures:
-- All 172 pages → `useModulePageData()` hook
+- Priority pages first, then `useModulePageData()` on remaining routes (mocks stay as fallback)
 - Login → backend session tracking (PDPL-safe, anonymized)
 - Page views → automatic backend events
 - TopStatusBar → real health check
@@ -36,7 +42,10 @@ This configures:
 
 ```
 src/lib/buildopt-api.ts          ← frontend-integration/src/lib/buildopt-api.ts
+src/lib/data-source.ts           ← frontend-integration/src/lib/data-source.ts
 src/hooks/useBuildOptApi.ts      ← frontend-integration/src/hooks/useBuildOptApi.ts
+src/hooks/useModulePageData.ts   ← frontend-integration/src/hooks/useModulePageData.ts
+src/components/BuildOptSessionSync.tsx
 ```
 
 ## Verify after Lovable republish

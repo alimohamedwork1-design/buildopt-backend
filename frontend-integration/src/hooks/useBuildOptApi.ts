@@ -20,6 +20,11 @@ import {
   getEquipment,
   getFddResults,
   getHealth,
+  getConnections,
+  getProtocolHealth,
+  getHealthHistory,
+  getHealthLogs,
+  getHealthPipeline,
   getModuleData,
   getPrayerTimes,
   getRamadanMode,
@@ -47,6 +52,37 @@ export function useApiHealth() {
 
 export function useConnections() {
   return useQuery({ queryKey: ["buildopt", "connections"], queryFn: getConnections, enabled: isApiEnabled(), refetchInterval: HEALTH_MS });
+}
+
+export function useProtocolHealth() {
+  return useQuery({ queryKey: ["buildopt", "protocols"], queryFn: getProtocolHealth, enabled: isApiEnabled(), refetchInterval: HEALTH_MS });
+}
+
+export function useHealthHistory(hours = 24) {
+  return useQuery({
+    queryKey: ["buildopt", "health-history", hours],
+    queryFn: () => getHealthHistory(hours),
+    enabled: isApiEnabled(),
+    staleTime: 60_000,
+  });
+}
+
+export function useHealthLogs(limit = 10) {
+  return useQuery({
+    queryKey: ["buildopt", "health-logs", limit],
+    queryFn: () => getHealthLogs(limit),
+    enabled: isApiEnabled(),
+    refetchInterval: HEALTH_MS,
+  });
+}
+
+export function useHealthPipeline() {
+  return useQuery({
+    queryKey: ["buildopt", "health-pipeline"],
+    queryFn: getHealthPipeline,
+    enabled: isApiEnabled(),
+    refetchInterval: HEALTH_MS,
+  });
 }
 
 export function useBuildings() {
