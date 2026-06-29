@@ -5,8 +5,8 @@ Set these on the **buildopt-backend** service (Railway dashboard → Variables):
 | Variable | Recommended value | Notes |
 |----------|-------------------|--------|
 | `DEMO_MODE` | `false` | Use live Influx/Metasys when connected; keep `true` until BMS is ready |
-| `SUPABASE_ALERT_WEBHOOK_URL` | `https://arddnpiluxrkndzzdpfi.supabase.co/functions/v1/sync-bms-alert` | After edge function deploy |
-| `ALERT_WEBHOOK_SECRET` | `buildopt-alert-sync-2026-secret` | Must match Supabase secret `BUILDOPT_WEBHOOK_SECRET` |
+| `SUPABASE_ALERT_WEBHOOK_URL` | *(optional)* | Legacy edge function URL; RPC via SQL is preferred |
+| `ALERT_WEBHOOK_SECRET` | `buildopt-alert-sync-2026-secret` | Must match secret in `supabase/SYNC_BMS_ALERT.sql` |
 | `INGEST_API_KEY` | *(strong random)* | Required in production for ingest endpoints |
 | `ALLOWED_ORIGINS` | `https://build-opt.site,https://buildopt-frontend-production.up.railway.app` | CORS |
 

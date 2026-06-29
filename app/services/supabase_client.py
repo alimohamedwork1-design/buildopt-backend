@@ -58,9 +58,11 @@ class SupabaseService:
             "created_at": alert.get("timestamp"),
         }
 
-        if self.alert_webhook_url:
-            if self._push_via_webhook(alert):
-                return True
+        if self.alert_webhook_secret and self._push_via_rpc(alert):
+            return True
+
+        if self.alert_webhook_url and self._push_via_webhook(alert):
+            return True
 
         if self._push_via_rest(row):
             return True
@@ -97,6 +99,29 @@ class SupabaseService:
             except Exception:
                 continue
         return False
+
+    def _push_via_rpc(self, alert: Dict[str, Any]) -> bool:
+        auth_key = self.service_key or self.key
+        if not self.url or not auth_key or not self.alert_webhook_secret:
+            return False
+        headers = {
+            "apikey": auth_key,
+            "Authorization": f"Bearer {auth_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            response = httpx.post(
+                f"{self.url.rstrip('/')}/rest/v1/rpc/sync_bms_alert",
+                headers=headers,
+                json={"p_secret": self.alert_webhook_secret, "p_alert": alert},
+                timeout=10.0,
+            )
+            if response.status_code not in (200, 201):
+                return False
+            body = response.json()
+            return bool(body.get("success", True))
+        except Exception:
+            return False
 
     def _push_via_webhook(self, alert: Dict[str, Any]) -> bool:
         headers = {

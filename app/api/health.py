@@ -393,22 +393,23 @@ async def health_pipeline() -> dict:
 
 @router.post("/alert-webhook/test")
 async def test_alert_webhook() -> dict:
-    """Probe Supabase edge function after deploy — verifies BUILDOPT_WEBHOOK_SECRET alignment."""
+    """Probe Supabase sync_bms_alert RPC (or legacy edge webhook) after SQL deploy."""
     import uuid
 
     settings = get_settings()
-    if not settings.supabase_alert_webhook_url:
+    if not settings.supabase_url or not settings.alert_webhook_secret:
         return {
             "status": "not_configured",
-            "message": "Set SUPABASE_ALERT_WEBHOOK_URL on Railway",
+            "message": "Set SUPABASE_URL and ALERT_WEBHOOK_SECRET on Railway (run supabase/SYNC_BMS_ALERT.sql)",
             "demo_mode": settings.demo_mode,
         }
 
     if settings.demo_mode:
         return {
             "status": "skipped",
-            "message": "Webhook test skipped in DEMO_MODE (alerts are simulated)",
-            "webhook_url": settings.supabase_alert_webhook_url,
+            "message": "Alert sync test skipped in DEMO_MODE (alerts are simulated)",
+            "rpc_url": f"{settings.supabase_url.rstrip('/')}/rest/v1/rpc/sync_bms_alert",
+            "webhook_url": settings.supabase_alert_webhook_url or None,
             "demo_mode": True,
         }
 
@@ -428,7 +429,8 @@ async def test_alert_webhook() -> dict:
     ok = supabase.push_alert(test_alert)
     return {
         "status": "ok" if ok else "failed",
-        "webhook_url": settings.supabase_alert_webhook_url,
+        "rpc_url": f"{settings.supabase_url.rstrip('/')}/rest/v1/rpc/sync_bms_alert",
+        "webhook_url": settings.supabase_alert_webhook_url or None,
         "secret_configured": bool(settings.alert_webhook_secret),
         "http_status": 200 if ok else 502,
         "alert_id": test_alert["id"],

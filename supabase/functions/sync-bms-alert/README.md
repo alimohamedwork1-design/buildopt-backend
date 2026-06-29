@@ -1,40 +1,38 @@
-# Deploy sync-bms-alert edge function
+# BMS alert sync — SQL (no edge function)
 
-## 1. Supabase Dashboard
+Replaces `sync-bms-alert` edge function with a Postgres RPC.
 
-1. Open [Supabase project](https://supabase.com/dashboard/project/arddnpiluxrkndzzdpfi/functions)
-2. **Create function** → name: `sync-bms-alert`
-3. Paste code from [`supabase/functions/sync-bms-alert/index.ts`](../supabase/functions/sync-bms-alert/index.ts)
-4. Add secret: `BUILDOPT_WEBHOOK_SECRET` = `buildopt-alert-sync-2026-secret`
-5. Deploy
+## 1. Run SQL in Supabase
 
-Or with Supabase CLI (after `supabase login` and `supabase link`):
+1. Open https://supabase.com/dashboard/project/arddnpiluxrkndzzdpfi/sql/new
+2. Paste **`supabase/SYNC_BMS_ALERT.sql`** (full file in this repo)
+3. Click **Run**
 
-```bash
-supabase secrets set BUILDOPT_WEBHOOK_SECRET=buildopt-alert-sync-2026-secret
-supabase functions deploy sync-bms-alert
-```
-
-## 2. Railway backend variables
+## 2. Railway (already set)
 
 | Variable | Value |
 |----------|--------|
-| `SUPABASE_ALERT_WEBHOOK_URL` | `https://arddnpiluxrkndzzdpfi.supabase.co/functions/v1/sync-bms-alert` |
+| `SUPABASE_URL` | `https://arddnpiluxrkndzzdpfi.supabase.co` |
+| `SUPABASE_KEY` | anon key (publishable) |
 | `ALERT_WEBHOOK_SECRET` | `buildopt-alert-sync-2026-secret` |
 
+`SUPABASE_ALERT_WEBHOOK_URL` is **optional** (legacy edge function only).
+
 ## 3. Verify
+
+**In SQL Editor** (after step 1):
+
+```sql
+select public.sync_bms_alert(
+  'buildopt-alert-sync-2026-secret',
+  '{"id":"sql-smoke-1","building_id":"burj-khalifa-01","severity":"info","category":"test","title":"SQL test","message":"Hello"}'::jsonb
+);
+```
+
+**From Railway** (when `DEMO_MODE=false`):
 
 ```bash
 curl -X POST https://buildopt-backend-production.up.railway.app/api/v1/health/alert-webhook/test
 ```
 
-Expect `"status":"ok"` when `DEMO_MODE=false` and webhook is live.
-
-Manual probe:
-
-```bash
-curl -X POST https://arddnpiluxrkndzzdpfi.supabase.co/functions/v1/sync-bms-alert \
-  -H "Content-Type: application/json" \
-  -H "x-buildopt-secret: buildopt-alert-sync-2026-secret" \
-  -d '{"id":"manual-test-1","building_id":"burj-khalifa-01","severity":"info","category":"test","title":"Manual test","message":"Hello","acknowledged":true}'
-```
+Backend calls `POST /rest/v1/rpc/sync_bms_alert` with your anon key + secret.
