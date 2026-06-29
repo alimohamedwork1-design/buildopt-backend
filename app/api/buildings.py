@@ -35,8 +35,16 @@ async def get_building(building_id: str) -> BuildingDetail:
 
 @router.get("/{building_id}/live", response_model=LiveBuildingData)
 async def get_live_data(building_id: str) -> LiveBuildingData:
+    from app.config import get_settings
+
+    settings = get_settings()
     data = await live_data_service.get_live_data(building_id)
     if not data:
+        if not settings.demo_mode:
+            raise HTTPException(
+                status_code=503,
+                detail=bilingual_error("Live data unavailable", "البيانات الحية غير متوفرة"),
+            )
         raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
     return data
 

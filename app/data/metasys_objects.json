@@ -1,0 +1,10 @@
+{
+  "burj-khalifa-01": {
+    "supply_air_temp": "obj-1001",
+    "return_air_temp": "obj-1002",
+    "hvac_power_kw": "obj-1010",
+    "total_kw": "obj-1020",
+    "temp_c": "obj-1030",
+    "co2_ppm": "obj-1040"
+  }
+}

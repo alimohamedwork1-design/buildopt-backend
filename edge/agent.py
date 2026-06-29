@@ -71,12 +71,38 @@ def bump_attempts(conn: sqlite3.Connection, row_id: int) -> None:
 def read_bacnet() -> dict:
     if not ENABLE_BACNET:
         return {}
+    map_path = Path(__file__).resolve().parent / "bacnet_points.json"
+    building_map: dict = {}
+    if map_path.exists():
+        try:
+            all_maps = json.loads(map_path.read_text(encoding="utf-8"))
+            building_map = all_maps.get(BUILDING_ID, {})
+        except (json.JSONDecodeError, OSError):
+            building_map = {}
+
+    if not building_map:
+        return {}
+
+    readings: dict = {}
     try:
         import BAC0
 
         bacnet = BAC0.lite(ip=BACNET_IP)
-        # Placeholder — map device points in production deployment
-        return {}
+        for key, point in building_map.items():
+            device = point.get("device")
+            obj = point.get("object")
+            if not device or not obj:
+                continue
+            addr = f"{device} {obj}"
+            try:
+                val = bacnet.read(addr)
+                if isinstance(val, (int, float)):
+                    readings[key] = float(val)
+                elif isinstance(val, (list, tuple)) and val:
+                    readings[key] = float(val[0])
+            except Exception:
+                continue
+        return readings
     except Exception:
         return {}
 
@@ -166,9 +192,20 @@ def push_snapshot(payload: dict) -> bool:
     return False
 
 
-def send_heartbeat() -> None:
+def send_heartbeat(protocol: str, data_points: int = 0) -> None:
     try:
-        httpx.get(f"{API_URL}/api/v1/ingest/status", timeout=10.0)
+        payload = {
+            "building_id": BUILDING_ID,
+            "protocol": protocol,
+            "last_read_at": datetime.now(timezone.utc).isoformat(),
+            "data_points": data_points,
+        }
+        httpx.post(
+            f"{API_URL}/api/v1/ingest/heartbeat",
+            json=payload,
+            headers=_headers(),
+            timeout=10.0,
+        )
     except Exception:
         pass
 
@@ -189,7 +226,7 @@ def main() -> None:
     heartbeat_counter = 0
 
     while True:
-        send_heartbeat()
+        send_heartbeat("edge", data_points=0)
         flush_queue(conn)
 
         payload = read_local_sensors()
@@ -197,6 +234,8 @@ def main() -> None:
             ok = push_snapshot(payload)
             if not ok:
                 enqueue(conn, payload)
+            protocol = "bacnet" if ENABLE_BACNET else "modbus"
+            send_heartbeat(protocol, data_points=len(payload.get("hvac", {})) + len(payload.get("energy", {})))
             print(
                 f"{datetime.now(timezone.utc).isoformat()} push={'ok' if ok else 'queued'} "
                 f"hvac_kw={payload['hvac']['power_kw']}"

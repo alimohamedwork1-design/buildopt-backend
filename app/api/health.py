@@ -10,8 +10,10 @@ from app.config import get_settings
 from app.database import get_influx_service, get_supabase_service
 from app.models.schemas import HealthResponse
 from app.services.connection_store import connection_store
+from app.services.edge_heartbeat_store import edge_heartbeat_store
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.live_data_service import list_alerts
+from app.services.metasys_object_store import get_metasys_objects
 from app.services.log_handler import get_log_buffer
 from app.services.pipeline_tracker import get_pipeline_jobs, seed_demo_jobs
 from app.utils.time_format import human_ago, human_until
@@ -26,7 +28,7 @@ def _uptime_seconds() -> int:
     return int((datetime.now(timezone.utc) - _app_started_at).total_seconds())
 
 
-def _protocol_items(settings, creds, now: datetime) -> list[dict]:
+def _protocol_items(settings, creds, now: datetime, metasys_probe: dict | None = None) -> list[dict]:
     if settings.demo_mode:
         metasys_last = now - timedelta(seconds=12)
         influx_last = now - timedelta(seconds=7)
@@ -76,18 +78,23 @@ def _protocol_items(settings, creds, now: datetime) -> list[dict]:
 
     influx = get_influx_service()
     supabase = get_supabase_service()
-    jci = JCIMetasysClient(
-        creds.host,
-        creds.username,
-        creds.password,
-        creds.version,
-        demo_mode=False,
-    )
-    metasys_status = "connected" if jci.status() == "ready" else "disconnected"
+    probe = metasys_probe or {"status": "not_configured", "response_ms": 0, "object_count": 0}
+    metasys_status = probe.get("status", "disconnected")
     if not creds.host:
         metasys_status = "not_configured"
+    object_count = probe.get("object_count", 0)
+    if object_count == 0 and creds.host:
+        from app.data.buildings_registry import BUILDING_REGISTRY
+
+        object_count = sum(len(get_metasys_objects(b["id"])) for b in BUILDING_REGISTRY)
+
     influx_status = "connected" if influx.status() == "connected" else "disconnected"
     supabase_status = "connected" if supabase.status() in ("connected", "webhook") else "disconnected"
+
+    bacnet_beat = edge_heartbeat_store.get("bacnet")
+    modbus_beat = edge_heartbeat_store.get("modbus")
+    bacnet_status = edge_heartbeat_store.status("bacnet")
+    modbus_status = edge_heartbeat_store.status("modbus")
 
     return [
         {
@@ -98,8 +105,8 @@ def _protocol_items(settings, creds, now: datetime) -> list[dict]:
             if creds.last_connected_at
             else None,
             "last_seen_human": human_ago(creds.last_connected_at) if creds.last_connected_at else None,
-            "data_points": 847 if metasys_status == "connected" else 0,
-            "response_ms": 145,
+            "data_points": object_count if metasys_status == "connected" else 0,
+            "response_ms": probe.get("response_ms", 0),
         },
         {
             "key": "influxdb",
@@ -121,16 +128,18 @@ def _protocol_items(settings, creds, now: datetime) -> list[dict]:
         {
             "key": "bacnet",
             "name": "BACnet",
-            "status": "not_configured" if not settings.bacnet_ip else "ready",
-            "last_seen": None,
-            "data_points": 0,
+            "status": bacnet_status,
+            "last_seen": bacnet_beat["last_read_at"].isoformat().replace("+00:00", "Z") if bacnet_beat else None,
+            "last_seen_human": human_ago(bacnet_beat["last_read_at"]) if bacnet_beat else None,
+            "data_points": bacnet_beat.get("data_points", 0) if bacnet_beat else 0,
         },
         {
             "key": "modbus",
             "name": "Modbus",
-            "status": "not_configured" if not settings.modbus_host else "ready",
-            "last_seen": None,
-            "data_points": 0,
+            "status": modbus_status,
+            "last_seen": modbus_beat["last_read_at"].isoformat().replace("+00:00", "Z") if modbus_beat else None,
+            "last_seen_human": human_ago(modbus_beat["last_read_at"]) if modbus_beat else None,
+            "data_points": modbus_beat.get("data_points", 0) if modbus_beat else 0,
         },
     ]
 
@@ -241,7 +250,17 @@ async def protocol_health() -> dict:
     settings = get_settings()
     now = datetime.now(timezone.utc)
     creds = connection_store.get_metasys()
-    protocols = _protocol_items(settings, creds, now)
+    metasys_probe: dict = {"status": "not_configured", "response_ms": 0, "object_count": 0}
+    if creds.host and not settings.demo_mode:
+        jci = JCIMetasysClient(
+            creds.host,
+            creds.username,
+            creds.password,
+            creds.version,
+            demo_mode=False,
+        )
+        metasys_probe = await jci.health_probe()
+    protocols = _protocol_items(settings, creds, now, metasys_probe)
     legacy = _legacy_protocol_fields(protocols)
     overall = "healthy"
     if any(p.get("status") == "disconnected" for p in protocols):
@@ -261,23 +280,24 @@ async def health_history(hours: int = Query(default=24, ge=1, le=168)) -> dict:
     data = influx.query_health_history(hours)
 
     if not data:
-        now = datetime.now(timezone.utc)
-        interval_minutes = 5
-        points = (hours * 60) // interval_minutes
-        rng = random.Random(42)
-        data = []
-        for i in range(points):
-            ts = now - timedelta(minutes=interval_minutes * (points - i - 1))
-            base = rng.randint(120, 180)
-            if rng.random() < 0.03:
-                base += rng.randint(80, 200)
-            data.append(
-                {
-                    "timestamp": ts.isoformat().replace("+00:00", "Z"),
-                    "response_ms": base,
-                    "status": "healthy" if base < 300 else "degraded",
-                }
-            )
+        if settings.demo_mode:
+            now = datetime.now(timezone.utc)
+            interval_minutes = 5
+            points = (hours * 60) // interval_minutes
+            rng = random.Random(42)
+            data = []
+            for i in range(points):
+                ts = now - timedelta(minutes=interval_minutes * (points - i - 1))
+                base = rng.randint(120, 180)
+                if rng.random() < 0.03:
+                    base += rng.randint(80, 200)
+                data.append(
+                    {
+                        "timestamp": ts.isoformat().replace("+00:00", "Z"),
+                        "response_ms": base,
+                        "status": "healthy" if base < 300 else "degraded",
+                    }
+                )
 
     return {
         "interval_minutes": 5,

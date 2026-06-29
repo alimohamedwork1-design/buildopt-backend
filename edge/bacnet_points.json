@@ -1,0 +1,8 @@
+{
+  "burj-khalifa-01": {
+    "total_kw": { "device": "1001", "object": "analogInput:1" },
+    "hvac_kw": { "device": "1001", "object": "analogInput:2" },
+    "supply_air_temp": { "device": "1001", "object": "analogInput:3" },
+    "temp_c": { "device": "1001", "object": "analogInput:4" }
+  }
+}

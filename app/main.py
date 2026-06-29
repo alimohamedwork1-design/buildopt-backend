@@ -9,7 +9,7 @@ from app.api import alerts, buildings, energy, equipment, gcc, health, ingest, j
 from app.config import get_settings
 from app.services.connection_store import connection_store
 from app.services.log_handler import install_log_handler, log_event
-from app.services.pipeline import run_fdd_cycle, run_ml_cycle, run_poll_cycle, run_prayer_sync, run_tariff_update
+from app.services.pipeline import run_fdd_cycle, run_metasys_keepalive, run_ml_cycle, run_poll_cycle, run_prayer_sync, run_tariff_update
 from app.services.pipeline_tracker import seed_demo_jobs
 
 
@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(run_ml_cycle, "interval", minutes=5, id="ml_anomaly")
     scheduler.add_job(run_tariff_update, "interval", hours=1, id="dewa_tariff")
     scheduler.add_job(run_prayer_sync, "interval", hours=24, id="prayer_sync")
+    scheduler.add_job(run_metasys_keepalive, "interval", minutes=10, id="metasys_keepalive")
     scheduler.start()
 
     log_event("info", "BuildOpt pipeline started", "تم تشغيل خط أنابيب BuildOpt")

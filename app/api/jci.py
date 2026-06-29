@@ -7,6 +7,7 @@ from app.models.schemas import JCICommand, JCIConnectionRequest
 from app.services.connection_store import connection_store
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.log_handler import log_event
+from app.services.metasys_object_store import get_metasys_objects, list_all_mappings, set_metasys_objects
 from app.utils.arabic_utils import bilingual_error, bilingual_success
 
 router = APIRouter(prefix="/jci", tags=["jci"])
@@ -26,13 +27,12 @@ def _get_client() -> JCIMetasysClient:
 
 @router.post("/test-connection")
 async def test_connection(body: JCIConnectionRequest) -> Dict[str, Any]:
-    settings = get_settings()
     client = JCIMetasysClient(
         host=body.host,
         username=body.username,
         password=body.password,
         version=body.version,
-        demo_mode=settings.demo_mode,
+        demo_mode=False,
     )
     result = await client.test_connection(body.host, body.username, body.password, body.version)
     if result.get("status") == "connected":
@@ -84,6 +84,31 @@ async def network_diagnostic(body: JCIConnectionRequest) -> Dict[str, Any]:
         demo_mode=settings.demo_mode,
     )
     return await client.network_diagnostic(body.host, body.username, body.password, body.version)
+
+
+@router.get("/buildings/{building_id}/objects")
+async def get_building_objects(building_id: str) -> Dict[str, Any]:
+    from app.data.buildings_registry import get_building_config
+
+    if not get_building_config(building_id):
+        raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
+    return {"building_id": building_id, "metasys_objects": get_metasys_objects(building_id)}
+
+
+@router.put("/buildings/{building_id}/objects")
+async def update_building_objects(building_id: str, body: Dict[str, str]) -> Dict[str, Any]:
+    from app.data.buildings_registry import get_building_config
+
+    if not get_building_config(building_id):
+        raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
+    objects = set_metasys_objects(building_id, body)
+    log_event("info", f"Metasys object map updated for {building_id}", "تم تحديث خريطة كائنات Metasys")
+    return {"building_id": building_id, "metasys_objects": objects}
+
+
+@router.get("/object-mappings")
+async def list_object_mappings() -> Dict[str, Any]:
+    return {"mappings": list_all_mappings()}
 
 
 @router.get("/objects")

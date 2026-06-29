@@ -41,6 +41,7 @@ class LiveBuildingData(BaseModel):
     environment: EnvironmentData
     active_alerts: int
     demo_mode: bool
+    source: Optional[Literal["live", "influx", "metasys", "edge", "demo", "simulated_fallback"]] = None
 
 
 class BuildingSummary(BaseModel):

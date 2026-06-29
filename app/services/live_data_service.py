@@ -29,13 +29,15 @@ from app.services.connection_store import connection_store
 from app.services.influx_client import InfluxService
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.live_cache import live_cache
+from app.services.metasys_object_store import get_metasys_objects
 from app.services.supabase_client import SupabaseService
 from app.utils.dewa_tariff import calculate_dewa_tariff
 
 
-def _influx() -> InfluxService:
+def _influx(*, force_live: bool = False) -> InfluxService:
     s = get_settings()
-    return InfluxService(s.influx_url, s.influx_token, s.influx_org, s.influx_bucket, s.demo_mode)
+    demo = s.demo_mode and not force_live
+    return InfluxService(s.influx_url, s.influx_token, s.influx_org, s.influx_bucket, demo)
 
 
 def _jci_from_store() -> JCIMetasysClient:
@@ -120,19 +122,18 @@ async def get_live_data(building_id: str) -> Optional[LiveBuildingData]:
     influx = _influx()
     from_influx = influx.get_latest_snapshot(building_id)
     if from_influx:
-        live_cache.set_live(building_id, from_influx)
-        return from_influx
+        live = from_influx.model_copy(update={"source": "influx"})
+        live_cache.set_live(building_id, live)
+        return live
 
-    cfg = get_building_config(building_id)
-    if cfg and cfg.get("metasys_objects") and connection_store.has_saved_metasys():
-        live = await _fetch_live_from_metasys(building_id, cfg)
+    objects = get_metasys_objects(building_id)
+    if objects and connection_store.has_saved_metasys():
+        cfg = get_building_config(building_id) or {"id": building_id}
+        live = await _fetch_live_from_metasys(building_id, {**cfg, "metasys_objects": objects})
         if live:
             live_cache.set_live(building_id, live)
             return live
 
-    fallback = demo_mode.get_live_data(building_id)
-    if fallback:
-        return fallback.model_copy(update={"demo_mode": False})
     return None
 
 
@@ -144,9 +145,10 @@ async def poll_metasys_buildings() -> int:
     polled = 0
     influx = _influx()
     for cfg in BUILDING_REGISTRY:
-        if not cfg.get("metasys_objects"):
+        objects = get_metasys_objects(cfg["id"])
+        if not objects:
             continue
-        live = await _fetch_live_from_metasys(cfg["id"], cfg)
+        live = await _fetch_live_from_metasys(cfg["id"], {**cfg, "metasys_objects": objects})
         if not live:
             continue
         live_cache.set_live(cfg["id"], live)
@@ -212,6 +214,7 @@ async def _fetch_live_from_metasys(building_id: str, cfg: Dict[str, Any]) -> Opt
         ),
         active_alerts=len([a for a in live_cache.get_alerts() if a.building_id == building_id]),
         demo_mode=False,
+        source="metasys",
     )
 
 
@@ -224,7 +227,7 @@ def get_building_metrics(building_id: str, period: str = "24h") -> Optional[Buil
     influx = _influx()
     points = influx.query_metrics(building_id, hours=hours)
     if not points:
-        return demo_mode.get_building_metrics(building_id, period)
+        return None
 
     metrics = [
         MetricPoint(timestamp=p["timestamp"], value=p["value"], metric=p["metric"])
@@ -243,8 +246,15 @@ def get_energy_consumption() -> EnergyConsumption:
         influx = _influx()
         live = influx.get_latest_snapshot("burj-khalifa-01")
     if not live:
-        data = demo_mode.get_energy_consumption()
-        return data.model_copy(update={"demo_mode": False})
+        return EnergyConsumption(
+            timestamp=datetime.now(timezone.utc),
+            total_kw=0,
+            hvac_kw=0,
+            lighting_kw=0,
+            other_kw=0,
+            cost_aed_per_hour=0,
+            demo_mode=False,
+        )
 
     hour = datetime.now(timezone.utc).hour
     tariff = 0.38 if 12 <= hour < 24 else 0.23
@@ -267,8 +277,12 @@ def get_energy_forecast(building_id: str, horizon_hours: int = 24) -> EnergyFore
     influx = _influx()
     history = influx.query_hourly_kw(building_id, hours=24)
     if not history:
-        forecast = demo_mode.get_energy_forecast(building_id, horizon_hours)
-        return forecast.model_copy(update={"demo_mode": False})
+        return EnergyForecast(
+            building_id=building_id,
+            horizon_hours=horizon_hours,
+            forecast=[],
+            demo_mode=False,
+        )
 
     values = [h["value"] for h in history if h.get("metric") == "total_kw"] or [h["value"] for h in history]
     base_kw = sum(values) / max(len(values), 1)
@@ -327,8 +341,14 @@ def get_energy_savings() -> EnergySavings:
             demo_mode=False,
         )
 
-    savings = demo_mode.get_energy_savings()
-    return savings.model_copy(update={"demo_mode": False})
+    return EnergySavings(
+        baseline_kwh=0,
+        actual_kwh=0,
+        savings_kwh=0,
+        savings_pct=0,
+        cost_saved_aed=0,
+        demo_mode=False,
+    )
 
 
 def get_dewa_tariff() -> DewaTariffResponse:
@@ -453,8 +473,11 @@ def list_fdd_results() -> List[FDDResult]:
 
 def ingest_live_snapshot(data: LiveBuildingData) -> None:
     """Accept live data from edge gateway or manual ingest."""
-    live_cache.set_live(data.building_id, data.model_copy(update={"demo_mode": False}))
-    influx = _influx()
+    live_cache.set_live(
+        data.building_id,
+        data.model_copy(update={"demo_mode": False, "source": data.source or "edge"}),
+    )
+    influx = _influx(force_live=True)
     tags = {"building_id": data.building_id}
     influx.write_point("total_kw", data.energy.total_kw, tags)
     influx.write_point("hvac_kw", data.energy.hvac_kw, tags)

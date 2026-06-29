@@ -10,14 +10,12 @@ from app.data.buildings_registry import BUILDING_REGISTRY, get_building_ids
 from app.ml.anomaly_detector import AnomalyDetector
 from app.ml.fault_detector import FaultDetector
 from app.models.schemas import Alert, FDDResult
-from app.services.bacnet_client import BACnetClient
 from app.services.connection_store import connection_store
 from app.services.influx_client import InfluxService
+from app.services.jci_metasys import JCIMetasysClient
 from app.services.live_cache import live_cache
 from app.services.live_data_service import get_live_data, poll_metasys_buildings
 from app.services.log_handler import log_event
-from app.services.modbus_client import ModbusClient
-from app.services.mqtt_client import MQTTClient
 from app.services.pipeline_tracker import record_job_run
 from app.services.supabase_client import SupabaseService
 from app.utils.dewa_tariff import calculate_dewa_tariff
@@ -80,16 +78,6 @@ async def run_poll_cycle() -> None:
     supabase = _supabase()
     fault_detector = FaultDetector(demo_mode=False)
 
-    bacnet = BACnetClient(settings.bacnet_ip, settings.bacnet_port, demo_mode=False)
-    modbus = ModbusClient(settings.modbus_host, settings.modbus_port, demo_mode=False)
-    MQTTClient(
-        settings.mqtt_broker,
-        settings.mqtt_port,
-        settings.mqtt_username,
-        settings.mqtt_password,
-        demo_mode=False,
-    )
-
     metasys_polled = await poll_metasys_buildings()
     all_alerts: List[Alert] = list(live_cache.get_alerts())
 
@@ -107,9 +95,6 @@ async def run_poll_cycle() -> None:
         influx.write_point("temp_c", live.environment.temp_c, tags)
         influx.write_point("co2_ppm", float(live.environment.co2_ppm), tags)
         influx.write_point("cop", live.hvac.cop, tags)
-
-        if cfg.get("bacnet_points"):
-            bacnet.read_points(cfg["bacnet_points"])
 
         readings = {
             "cop": live.hvac.cop,
@@ -275,6 +260,33 @@ async def run_tariff_update() -> None:
         f"DEWA tariff refreshed: AED {tariff.total_cost_aed:,.0f} projected",
         "تم تحديث تعرفة ديوا",
     )
+
+
+async def run_metasys_keepalive() -> None:
+    """Refresh Metasys JWT before 14-minute expiry."""
+    settings = get_settings()
+    if settings.demo_mode or not connection_store.has_saved_metasys():
+        return
+    record_job_run(
+        "metasys_keepalive",
+        name="Metasys Token Refresh",
+        name_ar="تجديد رمز Metasys",
+        interval_label="Every 10min",
+        interval_seconds=600,
+    )
+    creds = connection_store.get_metasys()
+    client = JCIMetasysClient(
+        creds.host,
+        creds.username,
+        creds.password,
+        creds.version,
+        demo_mode=False,
+    )
+    probe = await client.health_probe()
+    if probe.get("status") == "connected":
+        log_event("info", "Metasys token refreshed", "تم تجديد رمز Metasys")
+    else:
+        log_event("warning", "Metasys keepalive failed", "فشل تجديد Metasys")
 
 
 async def run_prayer_sync() -> None:

@@ -1,7 +1,10 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+import logging
 from typing import Any, Dict, List, Optional
 
 from app.models.schemas import LiveBuildingData, EnvironmentData, EnergyData, HVACData
+
+logger = logging.getLogger("buildopt.influx")
 
 
 class InfluxService:
@@ -25,7 +28,8 @@ class InfluxService:
                 from influxdb_client import InfluxDBClient
 
                 self._client = InfluxDBClient(url=url, token=token, org=org)
-            except Exception:
+            except Exception as exc:
+                logger.warning("InfluxDB client init failed: %s", exc)
                 self._client = None
 
     def status(self) -> str:
@@ -36,7 +40,8 @@ class InfluxService:
         try:
             self._client.ping()
             return "connected"
-        except Exception:
+        except Exception as exc:
+            logger.warning("InfluxDB ping failed: %s", exc)
             return "disconnected"
 
     def write_point(
@@ -58,7 +63,8 @@ class InfluxService:
             write_api = self._client.write_api()
             write_api.write(bucket=self.bucket, org=self.org, record=point)
             return True
-        except Exception:
+        except Exception as exc:
+            logger.warning("InfluxDB write failed (%s): %s", measurement, exc)
             return False
 
     def query_metrics(self, building_id: str, hours: int = 24) -> List[Dict[str, Any]]:
@@ -85,7 +91,8 @@ class InfluxService:
                         }
                     )
             return results
-        except Exception:
+        except Exception as exc:
+            logger.warning("InfluxDB query_metrics failed: %s", exc)
             return []
 
     def write_health_point(self, response_ms: float, status: str = "healthy") -> bool:
@@ -123,7 +130,8 @@ class InfluxService:
                         }
                     )
             return results
-        except Exception:
+        except Exception as exc:
+            logger.warning("InfluxDB query_health_history failed: %s", exc)
             return []
 
     def query_hourly_kw(self, building_id: str, hours: int = 24) -> List[Dict[str, Any]]:
@@ -156,7 +164,8 @@ class InfluxService:
                         }
                     )
             return sorted(results, key=lambda r: r["timestamp"])
-        except Exception:
+        except Exception as exc:
+            logger.warning("InfluxDB query_hourly_kw failed: %s", exc)
             return []
 
     def get_latest_snapshot(self, building_id: str) -> Optional[LiveBuildingData]:
@@ -217,5 +226,6 @@ class InfluxService:
                 active_alerts=0,
                 demo_mode=False,
             )
-        except Exception:
+        except Exception as exc:
+            logger.warning("InfluxDB get_latest_snapshot failed: %s", exc)
             return None

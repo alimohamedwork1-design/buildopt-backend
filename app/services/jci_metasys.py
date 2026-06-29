@@ -29,6 +29,27 @@ class JCIMetasysClient:
         self._token: Optional[str] = None
         self._token_expiry: Optional[datetime] = None
 
+    async def health_probe(self) -> Dict[str, Any]:
+        """Live ping — login + object count for protocol health."""
+        if self.demo_mode or not self.host:
+            return {"status": "not_configured", "response_ms": 0, "object_count": 0}
+
+        start = time.perf_counter()
+        token = await self._ensure_token()
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+        if not token:
+            return {"status": "disconnected", "response_ms": elapsed_ms, "object_count": 0}
+
+        try:
+            objects = await self.get_objects()
+            return {
+                "status": "connected",
+                "response_ms": elapsed_ms,
+                "object_count": len(objects),
+            }
+        except Exception:
+            return {"status": "disconnected", "response_ms": elapsed_ms, "object_count": 0}
+
     def status(self) -> str:
         if self.demo_mode:
             return "simulated"

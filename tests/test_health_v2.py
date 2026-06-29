@@ -69,7 +69,14 @@ def test_health_pipeline(client):
     assert "next_run_human" in job
 
 
-def test_jci_test_connection_demo(client):
+def test_jci_test_connection_live_probe(client, monkeypatch):
+    async def fake_test(*_a, **_k):
+        return {"status": "connected", "response_ms": 120, "server_version": "v4", "ssl_valid": True}
+
+    from app.services import jci_metasys
+
+    monkeypatch.setattr(jci_metasys.JCIMetasysClient, "test_connection", fake_test)
+
     response = client.post(
         "/api/v1/jci/test-connection",
         json={
@@ -82,7 +89,6 @@ def test_jci_test_connection_demo(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "connected"
-    assert data.get("demo") is True
 
 
 def test_jci_network_diagnostic_demo(client):
