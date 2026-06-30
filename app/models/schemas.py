@@ -44,6 +44,17 @@ class LiveBuildingData(BaseModel):
     source: Optional[Literal["live", "influx", "metasys", "edge", "demo", "simulated_fallback"]] = None
 
 
+SiteProfile = Literal[
+    "building_only",
+    "building_with_industrial_cooling",
+    "industrial_cooling_only",
+]
+
+
+class SiteProfileUpdate(BaseModel):
+    site_profile: SiteProfile
+
+
 class BuildingSummary(BaseModel):
     id: str
     name: str
@@ -53,6 +64,7 @@ class BuildingSummary(BaseModel):
     status: Literal["online", "offline", "maintenance"]
     energy_savings_pct: float
     active_alerts: int
+    site_profile: SiteProfile = "building_only"
 
 
 class BuildingDetail(BuildingSummary):

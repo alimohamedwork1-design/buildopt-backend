@@ -30,6 +30,7 @@ from app.services.influx_client import InfluxService
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.live_cache import live_cache
 from app.services.metasys_object_store import get_metasys_objects
+from app.services.site_profile_store import get_site_profile, shows_hvac_connection
 from app.services.supabase_client import SupabaseService
 from app.utils.dewa_tariff import calculate_dewa_tariff
 
@@ -86,6 +87,7 @@ def list_buildings() -> List[BuildingSummary]:
                 status="online" if cached else "maintenance",
                 energy_savings_pct=savings,
                 active_alerts=alerts,
+                site_profile=get_site_profile(cfg["id"]),
             )
         )
     return results
@@ -145,6 +147,8 @@ async def poll_metasys_buildings() -> int:
     polled = 0
     influx = _influx()
     for cfg in BUILDING_REGISTRY:
+        if not shows_hvac_connection(get_site_profile(cfg["id"])):
+            continue
         objects = get_metasys_objects(cfg["id"])
         if not objects:
             continue

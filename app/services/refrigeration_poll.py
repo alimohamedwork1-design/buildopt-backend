@@ -13,6 +13,7 @@ from app.services.modbus_client import ModbusClient
 from app.services.refrigeration_connection_store import get_refrigeration_connection
 from app.services.refrigeration_map_store import get_bacnet_map, get_modbus_map
 from app.services.refrigeration_object_store import get_refrigeration_objects
+from app.services.site_profile_store import get_site_profile, shows_refrigeration_connection
 from app.services.influx_client import InfluxService
 
 # In-memory latest snapshots per building
@@ -168,6 +169,8 @@ async def poll_building(building_id: str) -> Optional[Dict[str, Any]]:
 async def poll_all_buildings(*, include_demo: bool = False) -> int:
     polled = 0
     for cfg in BUILDING_REGISTRY:
+        if not shows_refrigeration_connection(get_site_profile(cfg["id"])):
+            continue
         conn = get_refrigeration_connection(cfg["id"])
         source = str(conn.get("source", "demo")).lower()
         if source == "demo" and not include_demo:

@@ -27,6 +27,7 @@ from app.models.schemas import (
     LiveBuildingData,
     MetricPoint,
 )
+from app.services.site_profile_store import get_site_profile
 
 BUILDINGS = [
     {
@@ -96,6 +97,7 @@ def list_buildings() -> List[BuildingSummary]:
                 status="online",
                 energy_savings_pct=_range(rng, 18.0, 23.0),
                 active_alerts=rng.randint(2, 5),
+                site_profile=get_site_profile(building["id"]),
             )
         )
     return results

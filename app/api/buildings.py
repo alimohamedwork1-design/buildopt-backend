@@ -13,8 +13,10 @@ from app.models.schemas import (
     ControlCommand,
     ControlResponse,
     LiveBuildingData,
+    SiteProfileUpdate,
 )
 from app.services import live_data_service
+from app.services.site_profile_store import get_site_profile, set_site_profile
 from app.utils.arabic_utils import bilingual_error
 
 router = APIRouter(prefix="/buildings", tags=["buildings"])
@@ -88,3 +90,23 @@ async def send_control(building_id: str, command: ControlCommand) -> ControlResp
         building_id=building_id,
         command=command.command,
     )
+
+
+@router.get("/{building_id}/site-profile")
+async def get_building_site_profile(building_id: str) -> dict:
+    building = live_data_service.get_building(building_id)
+    if not building:
+        raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
+    return {"building_id": building_id, "site_profile": get_site_profile(building_id)}
+
+
+@router.put("/{building_id}/site-profile")
+async def update_building_site_profile(building_id: str, body: SiteProfileUpdate) -> dict:
+    building = live_data_service.get_building(building_id)
+    if not building:
+        raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
+    try:
+        saved = set_site_profile(building_id, body.site_profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=bilingual_error(str(exc), str(exc))) from exc
+    return {"building_id": building_id, "site_profile": saved}
