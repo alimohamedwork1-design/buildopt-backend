@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     app_env: str = Field(default="development", alias="APP_ENV")
     secret_key: str = Field(default="change-me-in-production", alias="SECRET_KEY")
     allowed_origins: str = Field(
-        default="https://build-opt.site,https://www.build-opt.site,http://localhost:5173",
+        default="https://build-opt.site,https://www.build-opt.site,http://localhost:5173,https://localhost,capacitor://localhost,http://localhost",
         alias="ALLOWED_ORIGINS",
     )
 
