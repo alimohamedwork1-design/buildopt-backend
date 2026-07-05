@@ -284,6 +284,52 @@ class JCIConnectionRequest(BaseModel):
     version: str = "v4"
 
 
+class BuildingLocation(BaseModel):
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
+class BuildingConnectionCredentials(BaseModel):
+    host: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    version: str = "v4"
+
+
+class BuildingCreateRequest(BaseModel):
+    name: str
+    address: Optional[str] = None
+    city: Optional[str] = None
+    country: str = "UAE"
+    location: Optional[BuildingLocation] = None
+    building_type: Optional[str] = None
+    total_area_sqm: Optional[float] = None
+    floors: Optional[int] = None
+    year_built: Optional[int] = None
+    bms_vendor: Optional[str] = None
+    protocol: Optional[str] = None
+    connection_credentials: Optional[BuildingConnectionCredentials] = None
+    systems: List[str] = Field(default_factory=list)
+    site_profile: SiteProfile = "building_only"
+
+
+class EmptyDataPayload(BaseModel):
+    empty_state: bool = True
+    reason: str
+    message: BilingualMessage
+    actions: List[str] = Field(default_factory=list)
+
+
+class ModuleToggle(BaseModel):
+    module_slug: str
+    enabled: bool = True
+    building_id: Optional[str] = None
+
+
+class AccessLevelUpdate(BaseModel):
+    access_level: Literal["read_only", "read_write"]
+
+
 class ProtocolStatus(BaseModel):
     bacnet: str
     modbus: str

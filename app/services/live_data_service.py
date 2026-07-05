@@ -112,12 +112,30 @@ def get_building(building_id: str) -> Optional[BuildingDetail]:
     )
 
 
-async def get_live_data(building_id: str) -> Optional[LiveBuildingData]:
+async def get_live_data(building_id: str, user=None) -> Optional[LiveBuildingData]:
+    from app.models.user_context import UserContext
+
+    if isinstance(user, UserContext) and user.is_live_account:
+        row_conn = building_id in user.building_ids
+        if not row_conn and not user.is_admin:
+            return None
+
     cached = live_cache.get_live(building_id)
     if cached:
+        if isinstance(user, UserContext) and user.is_live_account:
+            return cached.model_copy(update={"demo_mode": False, "source": cached.source or "live"})
         return cached
 
     settings = get_settings()
+    if isinstance(user, UserContext) and user.is_live_account:
+        influx = _influx(force_live=True)
+        from_influx = influx.get_latest_snapshot(building_id)
+        if from_influx:
+            live = from_influx.model_copy(update={"source": "influx", "demo_mode": False})
+            live_cache.set_live(building_id, live)
+            return live
+        return None
+
     if settings.demo_mode:
         return demo_mode.get_live_data(building_id)
 
@@ -222,7 +240,21 @@ async def _fetch_live_from_metasys(building_id: str, cfg: Dict[str, Any]) -> Opt
     )
 
 
-def get_building_metrics(building_id: str, period: str = "24h") -> Optional[BuildingMetrics]:
+def get_building_metrics(building_id: str, period: str = "24h", user=None) -> Optional[BuildingMetrics]:
+    from app.models.user_context import UserContext
+
+    if isinstance(user, UserContext) and user.is_live_account:
+        hours = {"1h": 1, "24h": 24, "7d": 168}.get(period, 24)
+        influx = _influx(force_live=True)
+        points = influx.query_metrics(building_id, hours=hours)
+        if not points:
+            return None
+        metrics = [
+            MetricPoint(timestamp=p["timestamp"], value=p["value"], metric=p["metric"])
+            for p in points
+        ]
+        return BuildingMetrics(building_id=building_id, period=period, metrics=metrics)
+
     settings = get_settings()
     if settings.demo_mode:
         return demo_mode.get_building_metrics(building_id, period)

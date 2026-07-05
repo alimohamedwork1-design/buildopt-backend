@@ -5,7 +5,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import alerts, buildings, energy, equipment, gcc, health, ingest, jci, ml, modules, protocols, refrigeration, sessions, site
+from app.api import account, admin, alerts, buildings, energy, equipment, gcc, health, ingest, jci, ml, modules, protocols, refrigeration, sessions, site
 from app.config import get_settings
 from app.services.bms_auto_connect import run_bms_auto_connect
 from app.services.connection_store import connection_store
@@ -88,6 +88,8 @@ app.include_router(ingest.router, prefix=api_prefix)
 app.include_router(modules.router, prefix=api_prefix)
 app.include_router(sessions.router, prefix=api_prefix)
 app.include_router(site.router, prefix=api_prefix)
+app.include_router(account.router, prefix=api_prefix)
+app.include_router(admin.router, prefix=api_prefix)
 
 
 @app.get("/")

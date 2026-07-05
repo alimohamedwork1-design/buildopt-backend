@@ -1,8 +1,10 @@
-from typing import List, Optional
+from typing import List
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
-from app.models.schemas import Alert, AlertAcknowledge, EquipmentDetail, EquipmentSummary, MetricPoint, SetpointUpdate
+from app.deps.auth import UserContext, get_optional_user
+from app.deps.guards import empty_no_building, require_module_enabled, require_write_access
+from app.models.schemas import Alert, AlertAcknowledge
 from app.services import live_data_service
 from app.utils.arabic_utils import bilingual_error, bilingual_success
 
@@ -10,17 +12,27 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
 @router.get("", response_model=List[Alert])
-async def list_alerts() -> List[Alert]:
+async def list_alerts(user: UserContext = Depends(require_module_enabled("alerts"))) -> List[Alert]:
+    if user.is_live_account and not user.has_buildings:
+        return []
     return live_data_service.list_alerts()
 
 
 @router.get("/history", response_model=List[Alert])
-async def alert_history() -> List[Alert]:
+async def alert_history(user: UserContext = Depends(require_module_enabled("alerts"))) -> List[Alert]:
+    if user.is_live_account and not user.has_buildings:
+        return []
     return live_data_service.list_alert_history()
 
 
 @router.post("/{alert_id}/acknowledge")
-async def acknowledge_alert(alert_id: str, payload: AlertAcknowledge) -> dict:
+async def acknowledge_alert(
+    alert_id: str,
+    payload: AlertAcknowledge,
+    user: UserContext = Depends(require_write_access),
+) -> dict:
+    if user.is_live_account and not user.has_buildings:
+        raise HTTPException(status_code=404, detail=empty_no_building())
     ok = live_data_service.acknowledge_alert(alert_id, payload.acknowledged_by)
     if not ok:
         raise HTTPException(status_code=404, detail=bilingual_error("Alert not found", "التنبيه غير موجود"))
@@ -34,5 +46,7 @@ async def acknowledge_alert(alert_id: str, payload: AlertAcknowledge) -> dict:
 
 
 @router.get("/fdd")
-async def fdd_results():
+async def fdd_results(user: UserContext = Depends(require_module_enabled("fdd"))):
+    if user.is_live_account and not user.has_buildings:
+        return []
     return live_data_service.list_fdd_results()
