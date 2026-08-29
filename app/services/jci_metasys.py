@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.utils.http_retry import with_retry
+
 from app.services import demo_mode
 
 
@@ -87,15 +89,22 @@ class JCIMetasysClient:
             return {}
         return {"Authorization": f"Bearer {token}"}
 
+    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        async def _call() -> httpx.Response:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.request(method, url, **kwargs)
+                response.raise_for_status()
+                return response
+
+        return await with_retry(_call)
+
     async def get_objects(self) -> List[Dict[str, Any]]:
         if self.demo_mode:
             return demo_mode.get_jci_objects()
 
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(f"{self.host}/api/{self.version}/objects", headers=headers)
-            response.raise_for_status()
-            return response.json()
+        response = await self._request("GET", f"{self.host}/api/{self.version}/objects", headers=headers)
+        return response.json()
 
     async def get_present_value(self, object_id: str) -> Any:
         if self.demo_mode:
@@ -105,15 +114,17 @@ class JCIMetasysClient:
             return None
 
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(
+        try:
+            response = await self._request(
+                "GET",
                 f"{self.host}/api/{self.version}/objects/{object_id}/attributes/presentValue",
                 headers=headers,
             )
-            if response.status_code == 404:
-                return None
-            response.raise_for_status()
             return response.json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
 
     async def write_command(self, object_id: str, attribute: str, value: Any) -> bool:
         if self.demo_mode:
@@ -133,23 +144,20 @@ class JCIMetasysClient:
             return demo_mode.get_jci_alarms()
 
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(f"{self.host}/api/{self.version}/alarms", headers=headers)
-            response.raise_for_status()
-            return response.json()
+        response = await self._request("GET", f"{self.host}/api/{self.version}/alarms", headers=headers)
+        return response.json()
 
     async def get_trend(self, object_id: str) -> List[Dict[str, Any]]:
         if self.demo_mode:
             return demo_mode.get_jci_trend(object_id)
 
         headers = await self._auth_headers()
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(
-                f"{self.host}/api/{self.version}/trends/{object_id}/trendedAttributes",
-                headers=headers,
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET",
+            f"{self.host}/api/{self.version}/trends/{object_id}/trendedAttributes",
+            headers=headers,
+        )
+        return response.json()
 
     async def test_connection(
         self,

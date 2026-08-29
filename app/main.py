@@ -5,7 +5,29 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import account, admin, alerts, buildings, energy, equipment, gcc, health, ingest, jci, ml, modules, protocols, refrigeration, sessions, site
+from app.api import (
+    account,
+    admin,
+    alerts,
+    assistant,
+    buildings,
+    data_health,
+    energy,
+    equipment,
+    gcc,
+    health,
+    ingest,
+    jci,
+    ml,
+    modules,
+    protocols,
+    recommendations,
+    refrigeration,
+    savings,
+    sessions,
+    site,
+)
+from app.middleware.request_id import RequestIdMiddleware
 from app.config import get_settings
 from app.services.bms_auto_connect import run_bms_auto_connect
 from app.services.connection_store import connection_store
@@ -64,6 +86,7 @@ app = FastAPI(
 )
 
 settings = get_settings()
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -90,6 +113,10 @@ app.include_router(sessions.router, prefix=api_prefix)
 app.include_router(site.router, prefix=api_prefix)
 app.include_router(account.router, prefix=api_prefix)
 app.include_router(admin.router, prefix=api_prefix)
+app.include_router(data_health.router, prefix=api_prefix)
+app.include_router(savings.router, prefix=api_prefix)
+app.include_router(recommendations.router, prefix=api_prefix)
+app.include_router(assistant.router, prefix=api_prefix)
 
 
 @app.get("/")

@@ -10,7 +10,8 @@ from typing import Any, Dict, List, Optional
 from app.data.modules_registry import get_category
 from app.models.user_context import UserContext
 from app.services import live_data_service
-from app.services.data_policy import allows_simulated_telemetry
+from app.models.provenance import build_provenance
+from app.services.data_policy import allows_simulated_telemetry, resolve_data_mode
 from app.utils.gcc_features import get_ramadan_mode
 
 
@@ -56,6 +57,7 @@ def _empty_live_payload(slug: str, building_id: str, category: str, reason: str)
         "data_origin": None,
         "empty_state": True,
         "reason": reason,
+        "state": "NO_DATA",
         "message": {
             "en": "No live data received for this module yet.",
             "ar": "لم يتم استلام بيانات حية لهذه الوحدة بعد.",
@@ -64,6 +66,7 @@ def _empty_live_payload(slug: str, building_id: str, category: str, reason: str)
         "charts": {},
         "recommendations": [],
         "recent_activity": [],
+        "provenance": build_provenance(source=None, mode="LIVE", building_id=building_id, quality="UNKNOWN"),
     }
 
 
@@ -96,6 +99,8 @@ async def get_module_data(
         "fetched_at": now.isoformat().replace("+00:00", "Z"),
         "demo_mode": is_demo,
         "data_origin": live_data.source if live_data else ("SIMULATED" if simulate else None),
+        "mode": resolve_data_mode(user),
+        "state": "LIVE" if live_data and not is_demo else ("NO_DATA" if not simulate and not live_data else "DEMO"),
     }
 
     if simulate and rng is not None:
@@ -159,6 +164,15 @@ async def get_module_data(
         refrig = await live_data_service.get_refrigeration_snapshot(building_id)
         if refrig:
             payload["refrigeration"] = refrig
+
+    payload["provenance"] = build_provenance(
+        source=payload.get("data_origin"),
+        mode="DEMO" if is_demo else "LIVE",
+        building_id=building_id,
+        connector=str(payload.get("data_origin") or "") or None,
+        quality="GOOD" if live_data and not is_demo else "UNKNOWN",
+        observed_at=now,
+    )
 
     return payload
 

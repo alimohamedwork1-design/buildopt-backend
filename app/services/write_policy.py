@@ -16,7 +16,17 @@ class WriteMode(str, Enum):
     AUTOMATIC = "AUTOMATIC"
 
 
+class ControlMaturity(str, Enum):
+    """Pilot control levels L0–L4."""
+    L0_MONITOR = "L0_MONITOR"
+    L1_RECOMMEND = "L1_RECOMMEND"
+    L2_HUMAN_APPROVED = "L2_HUMAN_APPROVED"
+    L3_BOUNDED_AUTOMATION = "L3_BOUNDED_AUTOMATION"
+    L4_AUTONOMOUS = "L4_AUTONOMOUS"
+
+
 DEFAULT_WRITE_MODE = WriteMode.READ_ONLY
+DEFAULT_CONTROL_MATURITY = ControlMaturity.L0_MONITOR
 
 
 def validate_write_request(
@@ -78,4 +88,8 @@ def validate_write_request(
 
 
 def write_mode_metadata(mode: WriteMode = DEFAULT_WRITE_MODE) -> Dict[str, Any]:
-    return {"write_mode": mode.value, "write_enabled": mode != WriteMode.READ_ONLY}
+    return {
+        "write_mode": mode.value,
+        "write_enabled": mode != WriteMode.READ_ONLY,
+        "control_maturity": DEFAULT_CONTROL_MATURITY.value,
+    }

@@ -1,88 +1,54 @@
 # BuildOpt Productionization — Cursor Progress
 
 **Last updated:** 2026-08-29  
-**Prompt:** buildopt-cursor-master-productionization-prompt.md v1.0
+**Prompts:** productionization master + OpenBlue competitive hardening (Phases 1–10)
 
 ---
 
-## Phase Status (0–10)
+## OpenBlue Hardening (Phases 1–10)
 
 | Phase | Name | Status | Notes |
 |-------|------|--------|-------|
-| **0** | Repository & production-readiness audit | **PASS** | `docs/production-readiness-audit.md` |
-| **1** | Data integrity | **PARTIAL** | `data_policy.py`, `errors.py`, `module_data_service` live empty states, `test_data_integrity.py`; some pages still use `pickApiOrMock` |
-| **2** | Auth, RBAC, tenant isolation | **PARTIAL** | `guards.py`, `UserContext`; not all routes scoped |
-| **3** | Building onboarding & lifecycle | **PARTIAL** | `005_building_lifecycle.sql`, `excel_import.py`; no wizard / activate gate |
-| **4** | Metasys REST integration | **PARTIAL** | `jci_metasys.py`, auto-mapper; no production E2E (B1) |
-| **5** | Edge gateway & ingestion | **PARTIAL** | `edge/agent.py`, ingest API; BACnet live read placeholder |
-| **6** | FDD rule engine | **PARTIAL** | 7 rules + `NOT_EVALUABLE`; demo injection when no faults |
-| **7** | Write-back safety | **PARTIAL** | `READ_ONLY` default in `write_policy.py`; approval workflow planned |
-| **8** | Documentation pack | **PASS** | 12 docs in `docs/` (this session) |
-| **9** | Railway deployment hardening | **PARTIAL** | `requirements-railway.txt` updated (+openpyxl, multipart); scheduler lock still needed |
-| **10** | Pilot go-live verification | **PARTIAL** | `production-verification.md`; `DEMO_MODE=true` on prod |
+| **1** | Live data integrity | **PASS** | `data-source.ts`, `data-mode.ts`, `module-tier.ts`, LABS nav gate, provenance |
+| **2** | Metasys reliability | **PASS** | `http_retry.py`, retry on JCI reads, `RequestIdMiddleware` |
+| **3** | Semantic mapper | **PASS** | `semantic_mapper.py` confidence thresholds (0.95 auto / 0.75 review) |
+| **4** | Data health engine | **PASS** | `data_health_engine.py`, `GET /data-health/buildings/{id}`, `DataHealth.tsx` live-only |
+| **5** | FDD rule expansion | **PASS** | 11 AHU/chiller/energy rules + `NOT_EVALUABLE` prerequisites |
+| **6** | Savings engine | **PASS** | `savings_engine.py` POTENTIAL vs VERIFIED, `GET /savings/opportunities` |
+| **7** | Recommendations lifecycle | **PASS** | `recommendations_store.py`, `GET /recommendations`, migration `006_*` |
+| **8** | AI assistant tools | **PASS** | `ai_tools.py`, `POST /assistant/query` with evidence payload |
+| **9** | Observability + tests | **PASS** | X-Request-ID, `test_openblue_services.py` — **65 pytest passed** |
+| **10** | Control maturity + CORE mocks | **PARTIAL** | L0 default in `write_policy.py`; CORE pages: DataHealth, Equipment, LiveTelemetry, IntegrationHub fixed; ~20 ADVANCED/LABS pages still demo-first |
 
-**Overall:** PARTIAL — demo-ready, not pilot-ready until blockers B1–B3 closed.
+**Overall OpenBlue:** PARTIAL — architecture complete; pilot E2E blocked on B1–B3.
 
 ---
 
-## Completed Phases
+## Productionization Phases (0–10)
 
-### PHASE 0 — Audit
+| Phase | Name | Status |
+|-------|------|--------|
+| **0** | Audit | **PASS** |
+| **1** | Data integrity | **PASS** (CORE paths) |
+| **2** | Auth / RBAC | **PARTIAL** |
+| **3** | Building lifecycle | **PARTIAL** — self-contained migration `20260829120000_*` (re-run in Supabase) |
+| **4** | Metasys REST | **PARTIAL** — retry + keepalive; no live E2E |
+| **5** | Edge / ingest | **PARTIAL** |
+| **6** | FDD | **PASS** (rule pack) |
+| **7** | Write-back | **PASS** (READ_ONLY + L0–L4 maturity enum) |
+| **8** | Documentation | **PASS** |
+| **9** | Railway | **PARTIAL** |
+| **10** | Pilot verification | **PARTIAL** |
 
-**Status:** PASS
+---
 
-**Changed:**
-- `docs/production-readiness-audit.md`
-- `docs/cursor-progress.md`
+## Verification (this session)
 
-**Verified:**
 | Command | Result |
 |---------|--------|
-| `pytest tests/ -q` (backend) | **50 passed** |
-| `npm test` (frontend) | 10 passed, 1 unhandled error |
-| `npm run build` (frontend) | PASS |
-
----
-
-### PHASE 8 — Documentation
-
-**Status:** PASS
-
-**Deliverables:**
-- `docs/module-data-source-matrix.md`
-- `docs/system-architecture.md`
-- `docs/integration-architecture.md`
-- `docs/metasys-integration.md`
-- `docs/point-mapping.md`
-- `docs/data-governance.md`
-- `docs/security-model.md`
-- `docs/fdd-rules.md`
-- `docs/writeback-safety.md`
-- `docs/railway-deployment.md`
-- `docs/pilot-readiness-checklist.md`
-- `docs/production-verification.md`
-- `docs/cursor-progress.md` (updated)
-
-**Verified:**
-| Command | Result |
-|---------|--------|
-| `pytest tests/test_data_integrity.py tests/test_live_data_production.py tests/test_metasys_auto_mapper.py tests/test_health_v2.py -q` | 14 passed |
-
----
-
-## Next Task
-
-**PHASE 1 (continue) — Data integrity**
-
-1. Replace remaining `pickApiOrMock` live fallbacks with `pickApiOrMockStrict` on priority pages
-2. Wire `data_quality.py` into live API responses
-3. Add full `DEMO_MODE=false` API matrix test
-4. Add `openpyxl` + `python-multipart` to `requirements-railway.txt`
-
-**Start command:**
-```
-Read docs/production-verification.md, then continue Phase 1 items 1–4.
-```
+| `py -m pytest tests/ -q` (backend) | **65 passed** |
+| `npm run build` (frontend) | **PASS** |
+| `npm test -- src/test/data-source.test.ts` | **5 passed** |
 
 ---
 
@@ -91,41 +57,31 @@ Read docs/production-verification.md, then continue Phase 1 items 1–4.
 | ID | Description | Owner action |
 |----|-------------|--------------|
 | B1 | Real Metasys credentials/network | Provide pilot site access |
-| B2 | Production InfluxDB + Supabase keys | Ops / Railway env |
-| B3 | Destructive migration approval | Review before schema changes |
+| B2 | Railway `DEMO_MODE=false` + InfluxDB | Ops env vars |
+| B3 | Pilot building selection | Choose first live building |
 
 ---
 
-## Files Touched (cumulative)
+## Next Steps
 
-### Phase 0
-- `docs/production-readiness-audit.md`
-- `docs/cursor-progress.md`
+1. **Re-run** `buildopt-ai/supabase/migrations/20260829120000_building_lifecycle_canonical_points.sql` in Supabase SQL Editor (self-contained fix).
+2. Apply `buildopt-backend/supabase/migrations/006_recommendations_savings.sql`.
+3. Deploy backend with new routers (`/data-health`, `/savings`, `/recommendations`, `/assistant`).
+4. Commit/push OpenBlue changes (exclude `AssetRegistry.tsx` / `PredictiveEngine.tsx` unless requested).
+5. Remaining CORE pages (Alerts, Portfolio, ROI, Reports) — migrate to `pickApiArray` / `displayMetric` as needed.
 
-### Phase 1 (partial — code exists pre-doc session)
-- `app/models/errors.py`
-- `app/services/data_policy.py`
-- `app/services/data_quality.py`
-- `app/services/write_policy.py`
-- `app/services/audit_log.py`
-- `app/services/module_data_service.py`
-- `app/services/live_data_service.py`
-- `app/services/bms_connector.py`
-- `app/ml/fault_detector.py`
-- `tests/test_data_integrity.py`
-- `buildopt-ai/src/lib/data-source.ts`
+---
 
-### Phase 8 — Documentation (this session)
-- `docs/module-data-source-matrix.md`
-- `docs/system-architecture.md`
-- `docs/integration-architecture.md`
-- `docs/metasys-integration.md`
-- `docs/point-mapping.md`
-- `docs/data-governance.md`
-- `docs/security-model.md`
-- `docs/fdd-rules.md`
-- `docs/writeback-safety.md`
-- `docs/railway-deployment.md`
-- `docs/pilot-readiness-checklist.md`
-- `docs/production-verification.md`
-- `docs/cursor-progress.md`
+## Key New Files (uncommitted)
+
+### Backend
+- `app/utils/http_retry.py`, `app/middleware/request_id.py`
+- `app/services/semantic_mapper.py`, `data_health_engine.py`, `savings_engine.py`, `recommendations_store.py`, `ai_tools.py`
+- `app/api/data_health.py`, `savings.py`, `recommendations.py`, `assistant.py`
+- `supabase/migrations/006_recommendations_savings.sql`
+- `tests/test_openblue_services.py`
+
+### Frontend
+- `src/lib/module-tier.ts`, updates to `data-source.ts`, `data-mode.ts`, `SidebarNav.tsx`
+- `src/pages/DataHealth.tsx`, `Equipment.tsx`, `LiveTelemetry.tsx`, `IntegrationHub.tsx`
+- `src/hooks/useBuildOptApi.ts`, `src/lib/api-client.ts` (data-health/savings/recommendations hooks)
