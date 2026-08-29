@@ -1,0 +1,5 @@
+{
+  "supply_air_temp": "OBJECT_ID_FROM_METASYS",
+  "return_air_temp": "OBJECT_ID_FROM_METASYS",
+  "chiller_kw": "OBJECT_ID_FROM_METASYS"
+}

@@ -1,0 +1,24 @@
+services:
+  buildopt-edge:
+    build: .
+    environment:
+      GATEWAY_ID: edge-pilot-01
+      BUILDING_ID: ${BUILDING_ID}
+      TENANT_ID: ${TENANT_ID:-default}
+      CLOUD_API_URL: ${CLOUD_API_URL:-https://buildopt-backend-production.up.railway.app}
+      INGEST_API_KEY: ${INGEST_API_KEY}
+      EDGE_CONNECTOR: metasys
+      METASYS_HOST: ${METASYS_HOST}
+      METASYS_USERNAME: ${METASYS_USERNAME}
+      METASYS_PASSWORD: ${METASYS_PASSWORD}
+      METASYS_VERSION: v4
+      POLL_INTERVAL_SECONDS: 30
+      EDGE_QUEUE_DB: /data/edge_queue.db
+      MAPPED_POINTS_FILE: /config/mapped_points.json
+    volumes:
+      - edge-data:/data
+      - ./config:/config:ro
+    restart: unless-stopped
+
+volumes:
+  edge-data:

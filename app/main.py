@@ -15,6 +15,7 @@ from app.api import (
     data_health,
     energy,
     equipment,
+    gateways,
     gcc,
     health,
     ingest,
@@ -27,6 +28,7 @@ from app.api import (
     savings,
     sessions,
     site,
+    telemetry,
 )
 from app.middleware.request_id import RequestIdMiddleware
 from app.config import get_settings
@@ -125,6 +127,8 @@ app.include_router(data_health.router, prefix=api_prefix)
 app.include_router(savings.router, prefix=api_prefix)
 app.include_router(recommendations.router, prefix=api_prefix)
 app.include_router(assistant.router, prefix=api_prefix)
+app.include_router(telemetry.router, prefix=api_prefix)
+app.include_router(gateways.router, prefix=api_prefix)
 
 
 @app.get("/")

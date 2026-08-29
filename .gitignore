@@ -3,6 +3,8 @@ __pycache__/
 .env
 .venv/
 edge/.env
+buildopt-edge/.env
+buildopt-edge/config/mapped_points.json
 venv/
 .pytest_cache/
 .mypy_cache/
