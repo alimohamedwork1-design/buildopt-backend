@@ -29,7 +29,9 @@ from app.services.building_store import (
     save_connection,
     save_points,
     update_connection_status,
+    update_site_profile as update_site_profile_row,
 )
+from app.data.buildings_registry import get_building_config
 from app.services.excel_import import parse_building_excel
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.site_profile_store import get_site_profile, set_site_profile
@@ -260,7 +262,13 @@ async def send_control(
 @router.get("/{building_id}/site-profile")
 async def get_building_site_profile(building_id: str, user: UserContext = Depends(get_optional_user)) -> dict:
     assert_building_access(user, building_id)
-    return {"building_id": building_id, "site_profile": get_site_profile(building_id)}
+    if get_building_config(building_id):
+        return {"building_id": building_id, "site_profile": get_site_profile(building_id)}
+    owner = None if user.is_admin else user.user_id
+    row = await get_building_row(building_id, owner_id=owner)
+    if not row:
+        raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
+    return {"building_id": building_id, "site_profile": row.get("site_profile") or "building_only"}
 
 
 @router.put("/{building_id}/site-profile")
@@ -271,7 +279,14 @@ async def update_building_site_profile(
 ) -> dict:
     assert_building_access(user, building_id)
     try:
-        saved = set_site_profile(building_id, body.site_profile)
+        if get_building_config(building_id):
+            saved = set_site_profile(building_id, body.site_profile)
+        else:
+            owner = None if user.is_admin else user.user_id
+            row = await update_site_profile_row(building_id, body.site_profile, owner_id=owner)
+            if not row:
+                raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
+            saved = row.get("site_profile") or body.site_profile
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=bilingual_error(str(exc), str(exc))) from exc
     return {"building_id": building_id, "site_profile": saved}

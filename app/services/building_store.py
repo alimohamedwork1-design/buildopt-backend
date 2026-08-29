@@ -173,6 +173,43 @@ async def update_connection_status(building_id: str, status: str) -> None:
             )
 
 
+async def update_site_profile(building_id: str, site_profile: str, owner_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    valid = {"building_only", "building_with_industrial_cooling", "industrial_cooling_only"}
+    if site_profile not in valid:
+        raise ValueError(f"Invalid site_profile: {site_profile}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    mem = _MEMORY_BUILDINGS.get(building_id)
+    if mem:
+        if owner_id and mem.get("owner_id") != owner_id:
+            return None
+        mem["site_profile"] = site_profile
+        mem["updated_at"] = now
+        return mem
+
+    settings = get_settings()
+    if not settings.supabase_url:
+        return None
+
+    headers = _svc_headers()
+    params: Dict[str, str] = {"id": f"eq.{building_id}"}
+    if owner_id:
+        params["owner_id"] = f"eq.{owner_id}"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.patch(
+            f"{_base_url()}/rest/v1/buildings",
+            headers={**headers, "Prefer": "return=representation"},
+            params=params,
+            json={"site_profile": site_profile, "updated_at": now},
+        )
+        if resp.status_code in (200, 204) and resp.text.strip():
+            data = resp.json()
+            return data[0] if isinstance(data, list) else data
+        if resp.status_code in (200, 204):
+            return await get_building(building_id, owner_id=owner_id)
+    return None
+
+
 async def save_points(building_id: str, points: List[Dict[str, Any]]) -> int:
     _MEMORY_POINTS[building_id] = points
     settings = get_settings()
