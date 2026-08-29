@@ -19,6 +19,16 @@ _COUNTERS: Dict[str, int] = {
     "fdd_faults_detected": 0,
     "baseline_computations": 0,
     "recommendations_generated": 0,
+    "recommendation_transitions": 0,
+    "savings_verifications": 0,
+    "report_generations": 0,
+    "ai_tool_invocations": 0,
+    "influx_write_errors": 0,
+    "db_errors": 0,
+    "semantic_mapping_errors": 0,
+    "quality_engine_errors": 0,
+    "fdd_errors": 0,
+    "mv_errors": 0,
 }
 
 

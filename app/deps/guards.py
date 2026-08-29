@@ -55,6 +55,38 @@ def require_semantic_write(user: UserContext = Depends(get_required_user)) -> Us
     return user
 
 
+_RECOMMENDATION_WRITE_ROLES = frozenset({"admin", "energy_engineer", "facility_manager"})
+
+
+def require_recommendation_write(user: UserContext = Depends(get_required_user)) -> UserContext:
+    if user.is_read_only:
+        raise HTTPException(status_code=403, detail=bilingual_error("Read-only account", "حساب للقراءة فقط"))
+    if user.is_admin:
+        return user
+    if not _RECOMMENDATION_WRITE_ROLES.intersection(set(user.roles)):
+        raise HTTPException(
+            status_code=403,
+            detail=bilingual_error("Recommendation approval access required", "يتطلب صلاحيات اعتماد التوصيات"),
+        )
+    return user
+
+
+_SAVINGS_VERIFY_ROLES = frozenset({"admin", "energy_engineer"})
+
+
+def require_savings_verify(user: UserContext = Depends(get_required_user)) -> UserContext:
+    if user.is_read_only:
+        raise HTTPException(status_code=403, detail=bilingual_error("Read-only account", "حساب للقراءة فقط"))
+    if user.is_admin:
+        return user
+    if not _SAVINGS_VERIFY_ROLES.intersection(set(user.roles)):
+        raise HTTPException(
+            status_code=403,
+            detail=bilingual_error("Savings verification access required", "يتطلب صلاحيات التحقق من التوفير"),
+        )
+    return user
+
+
 def require_module_enabled(module_slug: str):
     async def _guard(user: UserContext = Depends(get_optional_user)) -> UserContext:
         if user.allows_demo_data():

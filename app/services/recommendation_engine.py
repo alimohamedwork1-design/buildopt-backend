@@ -23,10 +23,13 @@ def recommendation_from_fault(fault: Dict[str, Any]) -> Recommendation:
     return Recommendation(
         id=f"rec_{secrets.token_hex(6)}",
         building_id=fault.get("building_id", ""),
+        equipment_id=fault.get("equipment_id"),
         title=tpl["title"],
         description=tpl["action"],
+        recommended_action=tpl["action"],
         state=RecommendationState.RECOMMENDED,
         severity=fault.get("severity", "warning"),
+        confidence=fault.get("confidence"),
         evidence={
             "fault_id": fault.get("fault_id"),
             "rule_id": fault.get("rule_id"),
@@ -34,8 +37,10 @@ def recommendation_from_fault(fault: Dict[str, Any]) -> Recommendation:
             "confidence": fault.get("confidence"),
             "data_quality_score": fault.get("data_quality_score"),
         },
+        expected_impact={"type": "operational", "energy_kwh": None},
         fault_id=fault.get("fault_id"),
-        expected_saving_aed=None,
+        risk="low" if fault.get("severity") == "info" else "medium",
+        verification_plan="Monitor equipment after corrective action",
     )
 
 

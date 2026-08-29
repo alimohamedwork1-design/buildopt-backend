@@ -687,3 +687,120 @@ class SupabaseTelemetryStore:
             },
             prefer="resolution=ignore-duplicates,return=minimal",
         )
+
+    # ---- Recommendations & savings (migration 006/011) ----
+
+    @staticmethod
+    def _normalize_rec(row: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(row)
+        for key in ("evidence", "expected_impact"):
+            val = out.get(key)
+            if isinstance(val, str):
+                out[key] = json.loads(val or "{}")
+        return out
+
+    def upsert_recommendation(self, rec: Dict[str, Any]) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        row = {
+            "id": rec["id"],
+            "tenant_id": rec.get("tenant_id"),
+            "building_id": rec["building_id"],
+            "equipment_id": rec.get("equipment_id"),
+            "fault_id": rec.get("fault_id"),
+            "rec_type": rec.get("rec_type", "fdd_action"),
+            "title": rec["title"],
+            "description": rec.get("description", ""),
+            "state": rec.get("state", "DETECTED"),
+            "severity": rec.get("severity", "warning"),
+            "owner": rec.get("owner"),
+            "evidence": rec.get("evidence") or {},
+            "recommended_action": rec.get("recommended_action") or rec.get("description"),
+            "expected_impact": rec.get("expected_impact") or {},
+            "confidence": rec.get("confidence"),
+            "risk": rec.get("risk"),
+            "comfort_impact": rec.get("comfort_impact"),
+            "verification_plan": rec.get("verification_plan"),
+            "expected_saving_aed": rec.get("expected_saving_aed"),
+            "verified_saving_aed": rec.get("verified_saving_aed"),
+            "approved_by": rec.get("approved_by"),
+            "implemented_at": rec.get("implemented_at"),
+            "verified_at": rec.get("verified_at"),
+            "work_order_id": rec.get("work_order_id"),
+            "created_at": rec.get("created_at", now),
+            "updated_at": now,
+        }
+        self._request("POST", "recommendations", json_body=row, prefer="resolution=merge-duplicates,return=representation")
+        rows = self._request("GET", "recommendations", params={"id": f"eq.{rec['id']}", "limit": "1"}).json()
+        return self._normalize_rec(rows[0]) if rows else row
+
+    def get_recommendation(self, rec_id: str) -> Optional[Dict[str, Any]]:
+        rows = self._request("GET", "recommendations", params={"id": f"eq.{rec_id}", "limit": "1"}).json()
+        return self._normalize_rec(rows[0]) if rows else None
+
+    def list_recommendations(self, building_id: Optional[str] = None, *, limit: int = 100) -> List[Dict[str, Any]]:
+        params: Dict[str, str] = {"order": "created_at.desc", "limit": str(limit)}
+        if building_id:
+            params["building_id"] = f"eq.{building_id}"
+        rows = self._request("GET", "recommendations", params=params).json()
+        return [self._normalize_rec(r) for r in rows]
+
+    def insert_recommendation_audit(self, **kwargs: Any) -> None:
+        self._request(
+            "POST",
+            "recommendation_audit",
+            json_body={
+                "audit_id": kwargs["audit_id"],
+                "recommendation_id": kwargs["recommendation_id"],
+                "action": kwargs["action"],
+                "previous_state": kwargs.get("previous_state"),
+                "new_state": kwargs.get("new_state"),
+                "actor_user_id": kwargs.get("actor_user_id"),
+                "comment": kwargs.get("comment"),
+                "created_at": _iso(_utcnow()),
+            },
+            prefer="return=minimal",
+        )
+
+    @staticmethod
+    def _normalize_savings(row: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(row)
+        for key in ("weather_context", "schedule_context", "excluded_periods"):
+            val = out.get(key)
+            if isinstance(val, str):
+                out[key] = json.loads(val or ("[]" if key == "excluded_periods" else "{}"))
+        return out
+
+    def upsert_savings_opportunity(self, opp: Dict[str, Any]) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        row = {**opp, "updated_at": now, "created_at": opp.get("created_at", now)}
+        self._request("POST", "savings_opportunities", json_body=row, prefer="resolution=merge-duplicates,return=representation")
+        rows = self._request("GET", "savings_opportunities", params={"id": f"eq.{opp['id']}", "limit": "1"}).json()
+        return self._normalize_savings(rows[0]) if rows else row
+
+    def get_savings_opportunity(self, opp_id: str) -> Optional[Dict[str, Any]]:
+        rows = self._request("GET", "savings_opportunities", params={"id": f"eq.{opp_id}", "limit": "1"}).json()
+        return self._normalize_savings(rows[0]) if rows else None
+
+    def list_savings_opportunities(self, building_id: Optional[str] = None, *, limit: int = 100) -> List[Dict[str, Any]]:
+        params: Dict[str, str] = {"order": "created_at.desc", "limit": str(limit)}
+        if building_id:
+            params["building_id"] = f"eq.{building_id}"
+        rows = self._request("GET", "savings_opportunities", params=params).json()
+        return [self._normalize_savings(r) for r in rows]
+
+    def insert_savings_audit(self, **kwargs: Any) -> None:
+        self._request(
+            "POST",
+            "savings_audit",
+            json_body={
+                "audit_id": kwargs["audit_id"],
+                "savings_id": kwargs["savings_id"],
+                "action": kwargs["action"],
+                "previous_state": kwargs.get("previous_state"),
+                "new_state": kwargs.get("new_state"),
+                "actor_user_id": kwargs.get("actor_user_id"),
+                "comment": kwargs.get("comment"),
+                "created_at": _iso(_utcnow()),
+            },
+            prefer="return=minimal",
+        )

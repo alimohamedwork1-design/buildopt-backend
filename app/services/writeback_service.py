@@ -15,14 +15,26 @@ AUDIT_LOG: List[Dict[str, Any]] = []
 
 
 def writeback_status(site_id: Optional[str] = None) -> Dict[str, Any]:
+    allowed = ALLOWED_POINTS.get(site_id or "", []) if site_id else []
     return {
         "writeback_enabled": WRITEBACK_ENABLED,
         "write_mode": DEFAULT_WRITE_MODE.value,
         "control_maturity": DEFAULT_CONTROL_MATURITY.value,
+        "control_maturity_label": "L0 Monitoring / L1 Recommendation",
         "autonomous_control": False,
         "site_id": site_id,
-        "allowed_points_count": sum(len(v) for v in ALLOWED_POINTS.values()),
-        "message": "READ_ONLY — production writeback disabled by default",
+        "site_enablement": "disabled" if not WRITEBACK_ENABLED else "gated",
+        "allowlist_state": "empty" if not allowed else f"{len(allowed)} points",
+        "allowed_points_count": len(allowed),
+        "command_limits": {
+            "max_step_pct": 5,
+            "human_approval_required": True,
+            "min_interval_seconds": 300,
+        },
+        "human_approval_required": True,
+        "audit_ready": True,
+        "audit_entries": len(AUDIT_LOG),
+        "message": "READ_ONLY — production writeback disabled by default; no BMS commands sent",
     }
 
 

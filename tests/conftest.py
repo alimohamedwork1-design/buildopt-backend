@@ -6,6 +6,17 @@ import os
 
 import pytest
 
+from app.services.telemetry_store import TelemetryStore, reset_telemetry_store
+
+
+@pytest.fixture(autouse=True)
+def memory_telemetry_store():
+    """Durable business state tests use in-memory telemetry registry."""
+    store = TelemetryStore(":memory:")
+    reset_telemetry_store(store)
+    yield store
+    reset_telemetry_store(None)
+
 
 @pytest.fixture
 def demo_settings(monkeypatch):

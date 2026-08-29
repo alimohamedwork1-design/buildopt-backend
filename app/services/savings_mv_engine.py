@@ -1,14 +1,18 @@
-"""Savings & M&V engine — POTENTIAL != VERIFIED."""
+"""Savings & M&V engine — POTENTIAL != VERIFIED, durable."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.services.baseline_engine import compute_historical_baseline, deviation_from_baseline
-from app.services.savings_engine import SavingsOpportunity, SavingsState, compute_opportunity
-
-_OPPORTUNITIES: Dict[str, SavingsOpportunity] = {}
+from app.services.savings_engine import (
+    SavingsOpportunity,
+    SavingsState,
+    compute_opportunity,
+    get_opportunity,
+    list_opportunities,
+    upsert_opportunity,
+)
 
 
 def create_potential_savings(
@@ -24,7 +28,7 @@ def create_potential_savings(
 ) -> SavingsOpportunity:
     if data_coverage_pct < 50:
         raise ValueError("INSUFFICIENT_DATA — coverage below 50% for savings claim")
-    opp = compute_opportunity(
+    return compute_opportunity(
         opp_id=opp_id,
         building_id=building_id,
         title=title,
@@ -32,10 +36,8 @@ def create_potential_savings(
         expected_kwh=expected_kwh,
         tariff=tariff_aed,
         data_coverage_pct=data_coverage_pct,
+        recommendation_id=recommendation_id,
     )
-    opp.state = SavingsState.POTENTIAL
-    _OPPORTUNITIES[opp.id] = opp
-    return opp
 
 
 def verify_savings(
@@ -45,20 +47,26 @@ def verify_savings(
     measurement_days: int,
     min_days: int = 14,
 ) -> SavingsOpportunity:
-    opp = _OPPORTUNITIES.get(opp_id)
+    opp = get_opportunity(opp_id)
     if not opp:
         raise ValueError("opportunity_not_found")
     if measurement_days < min_days:
         opp.state = SavingsState.MONITORING
+        opp.verification_status = "MONITORING"
         opp.notes = f"MONITORING — {measurement_days}/{min_days} days collected"
-        return opp
+        opp.actual_kwh = actual_kwh
+        return upsert_opportunity(opp)
     avoided = max(0.0, opp.baseline_kwh - actual_kwh)
     opp.actual_kwh = actual_kwh
+    opp.after_energy_kwh = actual_kwh
     opp.avoided_kwh = avoided
+    opp.energy_saved_kwh = avoided
     opp.verified_saving_aed = round(avoided * opp.tariff_aed_per_kwh, 2)
+    opp.cost_saved = opp.verified_saving_aed
     opp.state = SavingsState.VERIFIED if avoided > 0 else SavingsState.REJECTED
+    opp.verification_status = opp.state.value
     opp.notes = f"Verified over {measurement_days} days"
-    return opp
+    return upsert_opportunity(opp)
 
 
 def savings_from_baseline(
@@ -69,6 +77,7 @@ def savings_from_baseline(
     current_kwh: float,
     history_series: List[Dict[str, Any]],
     tariff_aed: float = 0.38,
+    recommendation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     baseline = compute_historical_baseline(history_series)
     if not baseline.get("available"):
@@ -85,12 +94,10 @@ def savings_from_baseline(
         expected_kwh=expected,
         tariff_aed=tariff_aed,
         data_coverage_pct=baseline.get("data_coverage_pct", 0),
+        recommendation_id=recommendation_id,
     )
     return {"state": "POTENTIAL", "opportunity": opp.model_dump(mode="json"), "deviation": dev}
 
 
 def list_mv_opportunities(building_id: Optional[str] = None) -> List[SavingsOpportunity]:
-    items = list(_OPPORTUNITIES.values())
-    if building_id:
-        items = [o for o in items if o.building_id == building_id]
-    return items
+    return list_opportunities(building_id)

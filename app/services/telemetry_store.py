@@ -190,6 +190,96 @@ class TelemetryStore:
                 comment text,
                 created_at text not null
             );
+
+            create table if not exists recommendations (
+                id text primary key,
+                tenant_id text,
+                building_id text not null,
+                equipment_id text,
+                fault_id text,
+                rec_type text not null default 'fdd_action',
+                title text not null,
+                description text not null default '',
+                state text not null default 'DETECTED',
+                severity text not null default 'warning',
+                owner text,
+                evidence text not null default '{}',
+                recommended_action text,
+                expected_impact text not null default '{}',
+                confidence real,
+                risk text,
+                comfort_impact text,
+                verification_plan text,
+                expected_saving_aed real,
+                verified_saving_aed real,
+                approved_by text,
+                implemented_at text,
+                verified_at text,
+                work_order_id text,
+                created_at text not null,
+                updated_at text not null
+            );
+            create index if not exists recommendations_building_idx on recommendations(building_id, state);
+
+            create table if not exists recommendation_audit (
+                audit_id text primary key,
+                recommendation_id text not null,
+                action text not null,
+                previous_state text,
+                new_state text,
+                actor_user_id text,
+                comment text,
+                created_at text not null
+            );
+
+            create table if not exists savings_opportunities (
+                id text primary key,
+                tenant_id text,
+                building_id text not null,
+                recommendation_id text,
+                title text not null,
+                state text not null default 'POTENTIAL',
+                baseline_kwh real not null default 0,
+                expected_kwh real not null default 0,
+                actual_kwh real,
+                avoided_kwh real,
+                tariff_aed_per_kwh real not null default 0.38,
+                expected_saving_aed real not null default 0,
+                verified_saving_aed real,
+                confidence real not null default 0.5,
+                methodology text not null default 'baseline_comparison',
+                data_coverage_pct real not null default 0,
+                notes text,
+                measurement_period_start text,
+                measurement_period_end text,
+                implementation_date text,
+                before_energy_kwh real,
+                after_energy_kwh real,
+                normalized_baseline_kwh real,
+                weather_context text not null default '{}',
+                schedule_context text not null default '{}',
+                energy_saved_kwh real,
+                cost_saved real,
+                currency text not null default 'AED',
+                uncertainty real,
+                verification_status text,
+                excluded_periods text not null default '[]',
+                calculation_version text not null default 'mv_v1',
+                created_at text not null,
+                updated_at text not null
+            );
+            create index if not exists savings_building_idx on savings_opportunities(building_id, state);
+
+            create table if not exists savings_audit (
+                audit_id text primary key,
+                savings_id text not null,
+                action text not null,
+                previous_state text,
+                new_state text,
+                actor_user_id text,
+                comment text,
+                created_at text not null
+            );
             """
         )
         self._conn.commit()
@@ -768,6 +858,197 @@ class TelemetryStore:
             ) values (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (audit_id, fault_id, action, previous_status, new_status, actor_user_id, comment, _iso(_utcnow())),
+        )
+        self._conn.commit()
+
+    # ---- Recommendations ----
+
+    @staticmethod
+    def _json_load(val: Any, default: Any) -> Any:
+        if val is None:
+            return default
+        if isinstance(val, (dict, list)):
+            return val
+        try:
+            return json.loads(val or (json.dumps(default)))
+        except json.JSONDecodeError:
+            return default
+
+    def upsert_recommendation(self, rec: Dict[str, Any]) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        self._conn.execute(
+            """
+            insert into recommendations (
+                id, tenant_id, building_id, equipment_id, fault_id, rec_type, title, description,
+                state, severity, owner, evidence, recommended_action, expected_impact, confidence,
+                risk, comfort_impact, verification_plan, expected_saving_aed, verified_saving_aed,
+                approved_by, implemented_at, verified_at, work_order_id, created_at, updated_at
+            ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            on conflict(id) do update set
+                state=excluded.state, severity=excluded.severity, owner=excluded.owner,
+                evidence=excluded.evidence, recommended_action=excluded.recommended_action,
+                expected_impact=excluded.expected_impact, confidence=excluded.confidence,
+                risk=excluded.risk, comfort_impact=excluded.comfort_impact,
+                verification_plan=excluded.verification_plan,
+                expected_saving_aed=excluded.expected_saving_aed,
+                verified_saving_aed=excluded.verified_saving_aed,
+                approved_by=excluded.approved_by, implemented_at=excluded.implemented_at,
+                verified_at=excluded.verified_at, work_order_id=excluded.work_order_id,
+                updated_at=excluded.updated_at
+            """,
+            (
+                rec["id"], rec.get("tenant_id"), rec["building_id"], rec.get("equipment_id"),
+                rec.get("fault_id"), rec.get("rec_type", "fdd_action"), rec["title"],
+                rec.get("description", ""), rec.get("state", "DETECTED"), rec.get("severity", "warning"),
+                rec.get("owner"), json.dumps(rec.get("evidence") or {}),
+                rec.get("recommended_action") or rec.get("description"),
+                json.dumps(rec.get("expected_impact") or {}), rec.get("confidence"),
+                rec.get("risk"), rec.get("comfort_impact"), rec.get("verification_plan"),
+                rec.get("expected_saving_aed"), rec.get("verified_saving_aed"),
+                rec.get("approved_by"), rec.get("implemented_at"), rec.get("verified_at"),
+                rec.get("work_order_id"), rec.get("created_at", now), now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_recommendation(rec["id"]) or rec
+
+    def get_recommendation(self, rec_id: str) -> Optional[Dict[str, Any]]:
+        row = self._conn.execute("select * from recommendations where id=?", (rec_id,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["evidence"] = self._json_load(d.get("evidence"), {})
+        d["expected_impact"] = self._json_load(d.get("expected_impact"), {})
+        return d
+
+    def list_recommendations(
+        self, building_id: Optional[str] = None, *, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        if building_id:
+            rows = self._conn.execute(
+                "select * from recommendations where building_id=? order by created_at desc limit ?",
+                (building_id, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "select * from recommendations order by created_at desc limit ?", (limit,)
+            ).fetchall()
+        out = []
+        for row in rows:
+            d = dict(row)
+            d["evidence"] = self._json_load(d.get("evidence"), {})
+            d["expected_impact"] = self._json_load(d.get("expected_impact"), {})
+            out.append(d)
+        return out
+
+    def insert_recommendation_audit(self, **kwargs: Any) -> None:
+        self._conn.execute(
+            """
+            insert into recommendation_audit (
+                audit_id, recommendation_id, action, previous_state, new_state,
+                actor_user_id, comment, created_at
+            ) values (?,?,?,?,?,?,?,?)
+            """,
+            (
+                kwargs["audit_id"], kwargs["recommendation_id"], kwargs["action"],
+                kwargs.get("previous_state"), kwargs.get("new_state"),
+                kwargs.get("actor_user_id"), kwargs.get("comment"), _iso(_utcnow()),
+            ),
+        )
+        self._conn.commit()
+
+    # ---- Savings / M&V ----
+
+    def upsert_savings_opportunity(self, opp: Dict[str, Any]) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        self._conn.execute(
+            """
+            insert into savings_opportunities (
+                id, tenant_id, building_id, recommendation_id, title, state,
+                baseline_kwh, expected_kwh, actual_kwh, avoided_kwh, tariff_aed_per_kwh,
+                expected_saving_aed, verified_saving_aed, confidence, methodology,
+                data_coverage_pct, notes, measurement_period_start, measurement_period_end,
+                implementation_date, before_energy_kwh, after_energy_kwh, normalized_baseline_kwh,
+                weather_context, schedule_context, energy_saved_kwh, cost_saved, currency,
+                uncertainty, verification_status, excluded_periods, calculation_version,
+                created_at, updated_at
+            ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            on conflict(id) do update set
+                state=excluded.state, actual_kwh=excluded.actual_kwh, avoided_kwh=excluded.avoided_kwh,
+                verified_saving_aed=excluded.verified_saving_aed, notes=excluded.notes,
+                after_energy_kwh=excluded.after_energy_kwh, energy_saved_kwh=excluded.energy_saved_kwh,
+                cost_saved=excluded.cost_saved, verification_status=excluded.verification_status,
+                updated_at=excluded.updated_at
+            """,
+            (
+                opp["id"], opp.get("tenant_id"), opp["building_id"], opp.get("recommendation_id"),
+                opp["title"], opp.get("state", "POTENTIAL"),
+                opp.get("baseline_kwh", 0), opp.get("expected_kwh", 0), opp.get("actual_kwh"),
+                opp.get("avoided_kwh"), opp.get("tariff_aed_per_kwh", 0.38),
+                opp.get("expected_saving_aed", 0), opp.get("verified_saving_aed"),
+                opp.get("confidence", 0.5), opp.get("methodology", "baseline_comparison"),
+                opp.get("data_coverage_pct", 0), opp.get("notes"),
+                opp.get("measurement_period_start"), opp.get("measurement_period_end"),
+                opp.get("implementation_date"), opp.get("before_energy_kwh"),
+                opp.get("after_energy_kwh"), opp.get("normalized_baseline_kwh"),
+                json.dumps(opp.get("weather_context") or {}),
+                json.dumps(opp.get("schedule_context") or {}),
+                opp.get("energy_saved_kwh"), opp.get("cost_saved"),
+                opp.get("currency", "AED"), opp.get("uncertainty"),
+                opp.get("verification_status"), json.dumps(opp.get("excluded_periods") or []),
+                opp.get("calculation_version", "mv_v1"),
+                opp.get("created_at", now), now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_savings_opportunity(opp["id"]) or opp
+
+    def get_savings_opportunity(self, opp_id: str) -> Optional[Dict[str, Any]]:
+        row = self._conn.execute(
+            "select * from savings_opportunities where id=?", (opp_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["weather_context"] = self._json_load(d.get("weather_context"), {})
+        d["schedule_context"] = self._json_load(d.get("schedule_context"), {})
+        d["excluded_periods"] = self._json_load(d.get("excluded_periods"), [])
+        return d
+
+    def list_savings_opportunities(
+        self, building_id: Optional[str] = None, *, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        if building_id:
+            rows = self._conn.execute(
+                "select * from savings_opportunities where building_id=? order by created_at desc limit ?",
+                (building_id, limit),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "select * from savings_opportunities order by created_at desc limit ?", (limit,)
+            ).fetchall()
+        out = []
+        for row in rows:
+            d = dict(row)
+            d["weather_context"] = self._json_load(d.get("weather_context"), {})
+            d["schedule_context"] = self._json_load(d.get("schedule_context"), {})
+            d["excluded_periods"] = self._json_load(d.get("excluded_periods"), [])
+            out.append(d)
+        return out
+
+    def insert_savings_audit(self, **kwargs: Any) -> None:
+        self._conn.execute(
+            """
+            insert into savings_audit (
+                audit_id, savings_id, action, previous_state, new_state,
+                actor_user_id, comment, created_at
+            ) values (?,?,?,?,?,?,?,?)
+            """,
+            (
+                kwargs["audit_id"], kwargs["savings_id"], kwargs["action"],
+                kwargs.get("previous_state"), kwargs.get("new_state"),
+                kwargs.get("actor_user_id"), kwargs.get("comment"), _iso(_utcnow()),
+            ),
         )
         self._conn.commit()
 

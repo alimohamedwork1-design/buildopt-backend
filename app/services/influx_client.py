@@ -220,24 +220,25 @@ class InfluxService:
               |> filter(fn: (r) => r["_measurement"] == "telemetry_point")
               |> filter(fn: (r) => r["building_id"] == "{safe_building}")
               |> filter(fn: (r) => r["point_id"] == "{safe_point}")
-              |> filter(fn: (r) => r["_field"] == "value")
-              |> aggregateWindow(every: {every}, fn: mean, createEmpty: false)
-              |> limit(n: {MAX_HISTORY_POINTS})
+              |> filter(fn: (r) => r["_field"] == "value" or r["_field"] == "quality")
+              |> aggregateWindow(every: {every}, fn: last, createEmpty: false)
+              |> limit(n: {MAX_HISTORY_POINTS * 2})
             '''
             tables = self._client.query_api().query(flux, org=self.org)
-            results: List[Dict[str, Any]] = []
+            by_ts: Dict[str, Dict[str, Any]] = {}
             for table in tables:
                 for record in table.records:
                     ts = record.get_time()
                     if ts and ts.tzinfo is None:
                         ts = ts.replace(tzinfo=timezone.utc)
-                    results.append(
-                        {
-                            "timestamp": ts.isoformat().replace("+00:00", "Z") if ts else "",
-                            "value": float(record.get_value()),
-                            "point_id": point_id,
-                        }
-                    )
+                    key = ts.isoformat().replace("+00:00", "Z") if ts else ""
+                    row = by_ts.setdefault(key, {"timestamp": key, "point_id": point_id})
+                    field = record.get_field()
+                    if field == "value":
+                        row["value"] = float(record.get_value())
+                    elif field == "quality":
+                        row["quality"] = str(record.get_value())
+            results = [r for r in by_ts.values() if "value" in r]
             return sorted(results, key=lambda r: r["timestamp"])
         except ValueError as exc:
             logger.warning("InfluxDB query_telemetry_point_history invalid input: %s", exc)
