@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.data.modules_registry import get_category
+from app.models.user_context import UserContext
 from app.services import live_data_service
+from app.services.data_policy import allows_simulated_telemetry
 from app.utils.gcc_features import get_ramadan_mode
 
 
@@ -41,13 +43,49 @@ def _metric_cards(rng: random.Random, category: str) -> List[Dict[str, Any]]:
     ]
 
 
-async def get_module_data(slug: str, building_id: str = "burj-khalifa-01") -> Dict[str, Any]:
-    category = get_category(slug)
-    rng = _seed(f"{slug}-{building_id}")
+def _empty_live_payload(slug: str, building_id: str, category: str, reason: str) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
+    return {
+        "slug": slug or "overview",
+        "path": f"/{slug}" if slug else "/",
+        "category": category,
+        "building_id": building_id,
+        "timestamp": now.isoformat(),
+        "fetched_at": now.isoformat().replace("+00:00", "Z"),
+        "demo_mode": False,
+        "data_origin": None,
+        "empty_state": True,
+        "reason": reason,
+        "message": {
+            "en": "No live data received for this module yet.",
+            "ar": "لم يتم استلام بيانات حية لهذه الوحدة بعد.",
+        },
+        "metric_cards": [],
+        "charts": {},
+        "recommendations": [],
+        "recent_activity": [],
+    }
 
-    live_data = await live_data_service.get_live_data(building_id)
-    is_demo = live_data is None or live_data.demo_mode
+
+async def get_module_data(
+    slug: str,
+    building_id: str = "burj-khalifa-01",
+    user: Optional[UserContext] = None,
+) -> Dict[str, Any]:
+    category = get_category(slug)
+    now = datetime.now(timezone.utc)
+    simulate = allows_simulated_telemetry(user)
+
+    live_data = await live_data_service.get_live_data(building_id, user=user)
+    is_demo = simulate and (live_data is None or live_data.demo_mode)
+
+    if not simulate and live_data is None:
+        payload = _empty_live_payload(slug, building_id, category, "NO_TELEMETRY")
+        if category == "gcc":
+            payload["ramadan"] = get_ramadan_mode().model_dump(mode="json")
+        return payload
+
+    rng = _seed(f"{slug}-{building_id}") if simulate else None
 
     payload: Dict[str, Any] = {
         "slug": slug or "overview",
@@ -56,9 +94,12 @@ async def get_module_data(slug: str, building_id: str = "burj-khalifa-01") -> Di
         "building_id": building_id,
         "timestamp": now.isoformat(),
         "fetched_at": now.isoformat().replace("+00:00", "Z"),
-        "metric_cards": _metric_cards(rng, category),
         "demo_mode": is_demo,
+        "data_origin": live_data.source if live_data else ("SIMULATED" if simulate else None),
     }
+
+    if simulate and rng is not None:
+        payload["metric_cards"] = _metric_cards(rng, category)
 
     if live_data:
         payload["live"] = live_data.model_dump(mode="json")
@@ -68,39 +109,51 @@ async def get_module_data(slug: str, building_id: str = "burj-khalifa-01") -> Di
             payload["charts"] = _live_charts(live_data, building_id)
 
     if category in ("overview", "telemetry", "equipment", "optimization"):
-        payload["equipment"] = [e.model_dump(mode="json") for e in live_data_service.list_equipment(building_id)]
-        payload["alerts_count"] = len(live_data_service.list_alerts())
+        equipment = live_data_service.list_equipment(building_id, user=user)
+        payload["equipment"] = [e.model_dump(mode="json") for e in equipment]
+        alerts = live_data_service.list_alerts(user=user)
+        payload["alerts_count"] = len(alerts)
 
     if category in ("overview", "energy", "financial", "telemetry"):
-        payload["energy"] = live_data_service.get_energy_consumption().model_dump(mode="json")
-        payload["savings"] = live_data_service.get_energy_savings().model_dump(mode="json")
-        payload["forecast"] = live_data_service.get_energy_forecast(building_id).model_dump(mode="json")
+        consumption = live_data_service.get_energy_consumption(building_id, user=user)
+        if consumption:
+            payload["energy"] = consumption.model_dump(mode="json")
+        savings = live_data_service.get_energy_savings(building_id, user=user)
+        if savings:
+            payload["savings"] = savings.model_dump(mode="json")
+        forecast = live_data_service.get_energy_forecast(building_id, user=user)
+        if forecast:
+            payload["forecast"] = forecast.model_dump(mode="json")
 
     if category in ("energy", "gcc", "financial"):
-        payload["dewa_tariff"] = live_data_service.get_dewa_tariff().model_dump(mode="json")
+        tariff = live_data_service.get_dewa_tariff(building_id, user=user)
+        if tariff:
+            payload["dewa_tariff"] = tariff.model_dump(mode="json")
 
     if category in ("alerts", "fault_prediction", "overview"):
-        payload["alerts"] = [a.model_dump(mode="json") for a in live_data_service.list_alerts()]
-        payload["fdd"] = [f.model_dump(mode="json") for f in live_data_service.list_fdd_results()]
+        payload["alerts"] = [a.model_dump(mode="json") for a in live_data_service.list_alerts(user=user)]
+        payload["fdd"] = [f.model_dump(mode="json") for f in live_data_service.list_fdd_results(user=user)]
 
     if category == "gcc":
         payload["ramadan"] = get_ramadan_mode().model_dump(mode="json")
 
     if category in ("overview", "telemetry", "optimization"):
-        metrics = live_data_service.get_building_metrics(building_id, "24h")
+        metrics = live_data_service.get_building_metrics(building_id, "24h", user=user)
         if metrics:
             payload["metrics_24h"] = metrics.model_dump(mode="json")
 
-    if is_demo:
+    if is_demo and rng is not None:
         payload["recommendations"] = _recommendations(rng, category)
         payload["recent_activity"] = _activity(rng, category)
         if "charts" not in payload:
             payload["charts"] = _charts(rng, category)
-    else:
+    elif live_data:
         payload["recommendations"] = _live_recommendations(live_data, category)
         payload["recent_activity"] = _live_activity(live_data, category)
-        if "charts" not in payload:
-            payload["charts"] = _charts(rng, category)
+    else:
+        payload.setdefault("recommendations", [])
+        payload.setdefault("recent_activity", [])
+        payload.setdefault("charts", {})
 
     if slug == "industrial-refrigeration":
         refrig = await live_data_service.get_refrigeration_snapshot(building_id)

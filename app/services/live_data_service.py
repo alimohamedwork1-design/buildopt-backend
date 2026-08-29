@@ -24,8 +24,10 @@ from app.models.schemas import (
     LiveBuildingData,
     MetricPoint,
 )
+from app.models.user_context import UserContext
 from app.services import demo_mode
 from app.services.connection_store import connection_store
+from app.services.data_policy import allows_simulated_telemetry
 from app.services.influx_client import InfluxService
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.live_cache import live_cache
@@ -64,19 +66,15 @@ def _supabase() -> SupabaseService:
     )
 
 
-def list_buildings() -> List[BuildingSummary]:
-    settings = get_settings()
-    if settings.demo_mode:
+def list_buildings(user: Optional[UserContext] = None) -> List[BuildingSummary]:
+    if allows_simulated_telemetry(user):
         return demo_mode.list_buildings()
 
     results = []
     for cfg in BUILDING_REGISTRY:
         cached = live_cache.get_live(cfg["id"])
-        demo = demo_mode.get_building(cfg["id"])
-        savings = demo.energy_savings_pct if demo else 20.0
-        alerts = len([a for a in live_cache.get_alerts() if a.building_id == cfg["id"]]) or (
-            demo.active_alerts if demo else 0
-        )
+        savings = 0.0
+        alerts = len([a for a in live_cache.get_alerts() if a.building_id == cfg["id"]])
         results.append(
             BuildingSummary(
                 id=cfg["id"],
@@ -93,9 +91,8 @@ def list_buildings() -> List[BuildingSummary]:
     return results
 
 
-def get_building(building_id: str) -> Optional[BuildingDetail]:
-    settings = get_settings()
-    if settings.demo_mode:
+def get_building(building_id: str, user: Optional[UserContext] = None) -> Optional[BuildingDetail]:
+    if allows_simulated_telemetry(user):
         return demo_mode.get_building(building_id)
 
     cfg = get_building_config(building_id)
@@ -112,9 +109,7 @@ def get_building(building_id: str) -> Optional[BuildingDetail]:
     )
 
 
-async def get_live_data(building_id: str, user=None) -> Optional[LiveBuildingData]:
-    from app.models.user_context import UserContext
-
+async def get_live_data(building_id: str, user: Optional[UserContext] = None) -> Optional[LiveBuildingData]:
     if isinstance(user, UserContext) and user.is_live_account:
         row_conn = building_id in user.building_ids
         if not row_conn and not user.is_admin:
@@ -126,7 +121,6 @@ async def get_live_data(building_id: str, user=None) -> Optional[LiveBuildingDat
             return cached.model_copy(update={"demo_mode": False, "source": cached.source or "live"})
         return cached
 
-    settings = get_settings()
     if isinstance(user, UserContext) and user.is_live_account:
         influx = _influx(force_live=True)
         from_influx = influx.get_latest_snapshot(building_id)
@@ -136,7 +130,7 @@ async def get_live_data(building_id: str, user=None) -> Optional[LiveBuildingDat
             return live
         return None
 
-    if settings.demo_mode:
+    if allows_simulated_telemetry(user):
         return demo_mode.get_live_data(building_id)
 
     influx = _influx()
@@ -240,9 +234,7 @@ async def _fetch_live_from_metasys(building_id: str, cfg: Dict[str, Any]) -> Opt
     )
 
 
-def get_building_metrics(building_id: str, period: str = "24h", user=None) -> Optional[BuildingMetrics]:
-    from app.models.user_context import UserContext
-
+def get_building_metrics(building_id: str, period: str = "24h", user: Optional[UserContext] = None) -> Optional[BuildingMetrics]:
     if isinstance(user, UserContext) and user.is_live_account:
         hours = {"1h": 1, "24h": 24, "7d": 168}.get(period, 24)
         influx = _influx(force_live=True)
@@ -255,8 +247,7 @@ def get_building_metrics(building_id: str, period: str = "24h", user=None) -> Op
         ]
         return BuildingMetrics(building_id=building_id, period=period, metrics=metrics)
 
-    settings = get_settings()
-    if settings.demo_mode:
+    if allows_simulated_telemetry(user):
         return demo_mode.get_building_metrics(building_id, period)
 
     hours = {"1h": 1, "24h": 24, "7d": 168}.get(period, 24)
@@ -272,25 +263,19 @@ def get_building_metrics(building_id: str, period: str = "24h", user=None) -> Op
     return BuildingMetrics(building_id=building_id, period=period, metrics=metrics)
 
 
-def get_energy_consumption() -> EnergyConsumption:
-    settings = get_settings()
-    if settings.demo_mode:
+def get_energy_consumption(
+    building_id: str = "burj-khalifa-01",
+    user: Optional[UserContext] = None,
+) -> Optional[EnergyConsumption]:
+    if allows_simulated_telemetry(user):
         return demo_mode.get_energy_consumption()
 
-    live = live_cache.get_live("burj-khalifa-01")
+    live = live_cache.get_live(building_id)
     if not live:
-        influx = _influx()
-        live = influx.get_latest_snapshot("burj-khalifa-01")
+        influx = _influx(force_live=True)
+        live = influx.get_latest_snapshot(building_id)
     if not live:
-        return EnergyConsumption(
-            timestamp=datetime.now(timezone.utc),
-            total_kw=0,
-            hvac_kw=0,
-            lighting_kw=0,
-            other_kw=0,
-            cost_aed_per_hour=0,
-            demo_mode=False,
-        )
+        return None
 
     hour = datetime.now(timezone.utc).hour
     tariff = 0.38 if 12 <= hour < 24 else 0.23
@@ -305,12 +290,15 @@ def get_energy_consumption() -> EnergyConsumption:
     )
 
 
-def get_energy_forecast(building_id: str, horizon_hours: int = 24) -> EnergyForecast:
-    settings = get_settings()
-    if settings.demo_mode:
+def get_energy_forecast(
+    building_id: str,
+    horizon_hours: int = 24,
+    user: Optional[UserContext] = None,
+) -> Optional[EnergyForecast]:
+    if allows_simulated_telemetry(user):
         return demo_mode.get_energy_forecast(building_id, horizon_hours)
 
-    influx = _influx()
+    influx = _influx(force_live=True)
     history = influx.query_hourly_kw(building_id, hours=24)
     if not history:
         return EnergyForecast(
@@ -342,13 +330,15 @@ def get_energy_forecast(building_id: str, horizon_hours: int = 24) -> EnergyFore
     )
 
 
-def get_energy_savings() -> EnergySavings:
-    settings = get_settings()
-    if settings.demo_mode:
+def get_energy_savings(
+    building_id: str = "burj-khalifa-01",
+    user: Optional[UserContext] = None,
+) -> Optional[EnergySavings]:
+    if allows_simulated_telemetry(user):
         return demo_mode.get_energy_savings()
 
-    influx = _influx()
-    history = influx.query_hourly_kw("burj-khalifa-01", hours=720)
+    influx = _influx(force_live=True)
+    history = influx.query_hourly_kw(building_id, hours=720)
     if history:
         actual_kwh = sum(h["value"] for h in history)
         baseline_kwh = actual_kwh * 1.2
@@ -363,7 +353,7 @@ def get_energy_savings() -> EnergySavings:
             demo_mode=False,
         )
 
-    live = live_cache.get_live("burj-khalifa-01")
+    live = live_cache.get_live(building_id)
     if live:
         actual = live.energy.total_kw * 24 * 30
         baseline = actual * 1.18
@@ -372,74 +362,71 @@ def get_energy_savings() -> EnergySavings:
             baseline_kwh=round(baseline, 0),
             actual_kwh=round(actual, 0),
             savings_kwh=round(savings_kwh, 0),
-            savings_pct=round((savings_kwh / baseline) * 100, 1),
+            savings_pct=round((savings_kwh / baseline) * 100, 1) if baseline else 0,
             cost_saved_aed=round(savings_kwh * 0.30, 2),
             demo_mode=False,
         )
 
-    return EnergySavings(
-        baseline_kwh=0,
-        actual_kwh=0,
-        savings_kwh=0,
-        savings_pct=0,
-        cost_saved_aed=0,
-        demo_mode=False,
-    )
+    return None
 
 
-def get_dewa_tariff() -> DewaTariffResponse:
-    settings = get_settings()
-    if settings.demo_mode:
+def get_dewa_tariff(
+    building_id: str = "burj-khalifa-01",
+    user: Optional[UserContext] = None,
+) -> Optional[DewaTariffResponse]:
+    if allows_simulated_telemetry(user):
         return demo_mode.get_dewa_tariff()
 
     cached = live_cache.get_dewa_tariff()
     if cached:
         return DewaTariffResponse(**cached)
 
-    live = live_cache.get_live("burj-khalifa-01")
-    peak_kwh = (live.energy.total_kw * 12) if live else 52000.0
-    off_peak_kwh = (live.energy.total_kw * 12) if live else 34000.0
+    live = live_cache.get_live(building_id)
+    if not live:
+        influx = _influx(force_live=True)
+        live = influx.get_latest_snapshot(building_id)
+    if not live:
+        return None
+
+    peak_kwh = live.energy.total_kw * 12
+    off_peak_kwh = live.energy.total_kw * 12
     tariff = calculate_dewa_tariff(peak_kwh, off_peak_kwh, 950.0)
     live_cache.set_dewa_tariff(tariff.model_dump(mode="json"))
     return tariff
 
 
-def list_equipment(building_id: Optional[str] = None) -> List[EquipmentSummary]:
-    settings = get_settings()
-    if settings.demo_mode:
+def list_equipment(
+    building_id: Optional[str] = None,
+    user: Optional[UserContext] = None,
+) -> List[EquipmentSummary]:
+    if allows_simulated_telemetry(user):
         return demo_mode.list_equipment(building_id)
 
     bid = building_id or "burj-khalifa-01"
     live = live_cache.get_live(bid)
     if not live:
-        influx = _influx()
+        influx = _influx(force_live=True)
         live = influx.get_latest_snapshot(bid)
+    if not live:
+        return []
 
-    if live:
-        templates = demo_mode.list_equipment(bid)
-        results: List[EquipmentSummary] = []
-        for idx, item in enumerate(templates[:8]):
-            power = live.energy.hvac_kw if "Chiller" in item.name or "AHU" in item.name else live.energy.lighting_kw
-            status = "fault" if live.hvac.cop < 3.2 and "Chiller" in item.name else item.status
-            results.append(
-                item.model_copy(
-                    update={
-                        "power_kw": round(power / max(len(templates), 1), 1) if idx == 0 else item.power_kw,
-                        "efficiency": min(0.98, max(0.7, live.hvac.cop / 5.0)),
-                        "status": status,
-                    }
-                )
-            )
-        return results
-
-    items = demo_mode.list_equipment(building_id)
-    return [item.model_copy(update={}) for item in items]
+    return [
+        EquipmentSummary(
+            id=f"{bid}-hvac-plant",
+            name="HVAC Plant (live)",
+            type="chiller",
+            building_id=bid,
+            status="running" if live.hvac.cop >= 3.2 else "fault",
+            power_kw=live.energy.hvac_kw,
+            efficiency=min(0.98, max(0.7, live.hvac.cop / 5.0)),
+        )
+    ]
 
 
-def get_equipment(equipment_id: str) -> Optional[EquipmentDetail]:
-    settings = get_settings()
-    if settings.demo_mode:
+def get_equipment(equipment_id: str, user: Optional[UserContext] = None) -> Optional[EquipmentDetail]:
+    if allows_simulated_telemetry(user):
         return demo_mode.get_equipment(equipment_id)
+
     detail = demo_mode.get_equipment(equipment_id)
     if not detail:
         return None
@@ -451,34 +438,31 @@ def get_equipment(equipment_id: str) -> Optional[EquipmentDetail]:
                 "power_kw": live.energy.hvac_kw,
             }
         )
-    return detail
+    return None
 
 
-def get_equipment_history(equipment_id: str) -> List[MetricPoint]:
-    settings = get_settings()
-    if settings.demo_mode:
+def get_equipment_history(equipment_id: str, user: Optional[UserContext] = None) -> List[MetricPoint]:
+    if allows_simulated_telemetry(user):
         return demo_mode.get_equipment_history(equipment_id)
 
     detail = demo_mode.get_equipment(equipment_id)
-    if detail:
-        metrics = get_building_metrics(detail.building_id, "24h")
-        if metrics:
-            return metrics.metrics
-    return demo_mode.get_equipment_history(equipment_id)
+    if not detail:
+        return []
+    metrics = get_building_metrics(detail.building_id, "24h", user=user)
+    if metrics:
+        return metrics.metrics
+    return []
 
 
-def list_alerts() -> List[Alert]:
-    settings = get_settings()
-    if settings.demo_mode:
+def list_alerts(user: Optional[UserContext] = None) -> List[Alert]:
+    if allows_simulated_telemetry(user):
         return demo_mode.list_alerts()
     cached = live_cache.get_alerts()
-    if cached:
-        return cached
-    return demo_mode.list_alerts()
+    return cached or []
 
 
-def list_alert_history() -> List[Alert]:
-    alerts = list_alerts()
+def list_alert_history(user: Optional[UserContext] = None) -> List[Alert]:
+    alerts = list_alerts(user=user)
     for alert in alerts:
         alert.acknowledged = True
     return alerts
@@ -496,15 +480,12 @@ def acknowledge_alert(alert_id: str, acknowledged_by: Optional[str] = None) -> b
     return supabase.acknowledge_alert(alert_id, acknowledged_by)
 
 
-def list_fdd_results() -> List[FDDResult]:
-    settings = get_settings()
-    if settings.demo_mode:
+def list_fdd_results(user: Optional[UserContext] = None) -> List[FDDResult]:
+    if allows_simulated_telemetry(user):
         return demo_mode.list_fdd_results()
 
     cached = live_cache.get_fdd_results()
-    if cached:
-        return cached
-    return demo_mode.list_fdd_results()
+    return cached or []
 
 
 def ingest_live_snapshot(data: LiveBuildingData) -> None:

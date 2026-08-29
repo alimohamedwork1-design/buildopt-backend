@@ -41,7 +41,7 @@ async def module_data(
             raise HTTPException(status_code=403, detail=bilingual_error(f"Module '{slug}' disabled", "الوحدة معطلة"))
     assert_building_access(user, building_id)
     normalized = "" if slug in ("overview", "home", "index") else slug
-    return await get_module_data(normalized, building_id)
+    return await get_module_data(normalized, building_id, user=user)
 
 
 @router.get("/categories")

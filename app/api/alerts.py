@@ -15,14 +15,14 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 async def list_alerts(user: UserContext = Depends(require_module_enabled("alerts"))) -> List[Alert]:
     if user.is_live_account and not user.has_buildings:
         return []
-    return live_data_service.list_alerts()
+    return live_data_service.list_alerts(user=user)
 
 
 @router.get("/history", response_model=List[Alert])
 async def alert_history(user: UserContext = Depends(require_module_enabled("alerts"))) -> List[Alert]:
     if user.is_live_account and not user.has_buildings:
         return []
-    return live_data_service.list_alert_history()
+    return live_data_service.list_alert_history(user=user)
 
 
 @router.post("/{alert_id}/acknowledge")
@@ -49,4 +49,4 @@ async def acknowledge_alert(
 async def fdd_results(user: UserContext = Depends(require_module_enabled("fdd"))):
     if user.is_live_account and not user.has_buildings:
         return []
-    return live_data_service.list_fdd_results()
+    return live_data_service.list_fdd_results(user=user)

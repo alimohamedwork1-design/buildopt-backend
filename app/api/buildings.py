@@ -17,7 +17,10 @@ from app.models.schemas import (
     LiveBuildingData,
     SiteProfileUpdate,
 )
+from app.models.errors import ErrorCode, api_error
+from app.services.audit_log import record_audit
 from app.services import live_data_service
+from app.services.write_policy import DEFAULT_WRITE_MODE, validate_write_request
 from app.services.building_store import (
     create_building,
     get_building as get_building_row,
@@ -235,14 +238,20 @@ async def send_control(
         if not building:
             raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
 
-    return ControlResponse(
-        success=True,
-        message=bilingual_success(
-            f"Command '{command.command}' accepted for {command.target}",
-            f"تم قبول الأمر '{command.command}'",
-        ),
-        building_id=building_id,
-        command=command.command,
+    validate_write_request(user, mode=DEFAULT_WRITE_MODE, requested_value=command.value)
+    record_audit(
+        actor=user.user_id,
+        tenant=user.user_id,
+        action="building.control.request",
+        resource=building_id,
+        result="blocked_read_only",
+        metadata={"command": command.command, "target": command.target},
+    )
+    raise api_error(
+        ErrorCode.COMMAND_NOT_ALLOWED,
+        "Building control write-back is disabled (READ_ONLY mode)",
+        "التحكم في المبنى معطل (وضع القراءة فقط)",
+        status_code=403,
     )
 
 
