@@ -45,7 +45,13 @@ def stable_event_id(
 
 class TelemetryPipeline:
     def __init__(self) -> None:
-        self.store = get_telemetry_store()
+        self._store: Any = None
+
+    @property
+    def store(self) -> Any:
+        if self._store is None:
+            self._store = get_telemetry_store()
+        return self._store
 
     def process_batch(
         self,
@@ -229,4 +235,11 @@ class TelemetryPipeline:
         }
 
 
-telemetry_pipeline = TelemetryPipeline()
+_pipeline: Optional[TelemetryPipeline] = None
+
+
+def get_telemetry_pipeline() -> TelemetryPipeline:
+    global _pipeline
+    if _pipeline is None:
+        _pipeline = TelemetryPipeline()
+    return _pipeline

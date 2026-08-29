@@ -26,7 +26,7 @@ Tenant
 
 4. **Idempotency** — Replayed events (timeout, edge restart, cloud reconnect) match existing `event_id` and are counted as duplicates — no second time-series point.
 
-5. **Current state** — Latest value served from `point_current_state` with freshness computed from `last_cloud_received_at` vs `expected_interval_seconds`.
+5. **Current state** — Latest value served from `point_current_state` with freshness computed from `last_cloud_received_at` vs `expected_interval_seconds`. Production persistence uses Supabase Postgres (migration 007); SQLite is dev/test only unless explicitly configured.
 
 6. **Frontend display** — Live Telemetry shows source name, quality, freshness state, and connector. No mock substitution in live mode.
 

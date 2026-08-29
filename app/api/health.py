@@ -16,6 +16,7 @@ from app.services.live_data_service import list_alerts
 from app.services.metasys_object_store import get_metasys_objects
 from app.services.log_handler import get_log_buffer
 from app.services.pipeline_tracker import get_pipeline_jobs, seed_demo_jobs
+from app.services.telemetry_store import get_telemetry_store_status
 from app.utils.time_format import human_ago, human_until
 
 router = APIRouter(prefix="/health", tags=["health"])
@@ -165,6 +166,9 @@ def _compute_health_score(settings) -> tuple[int, str, str]:
             score -= 15
         if supabase.status() in ("not_configured", "disconnected"):
             score -= 15
+        telemetry = get_telemetry_store_status()
+        if telemetry["required"] and not telemetry["durable"]:
+            score -= 20
         if connection_store.has_saved_metasys():
             jci = JCIMetasysClient(
                 creds.host,
@@ -237,6 +241,7 @@ async def connection_health() -> dict:
         "demo_mode": settings.demo_mode,
         "influxdb": influx.status(),
         "supabase": supabase.status(),
+        "telemetry_store": get_telemetry_store_status(),
         "jci_metasys": jci.status(),
         "alert_webhook": bool(settings.supabase_alert_webhook_url),
         "ingest_api": bool(settings.ingest_api_key),

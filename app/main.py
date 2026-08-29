@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import (
     account,
@@ -39,6 +40,10 @@ from app.services.connection_store import connection_store
 from app.services.log_handler import install_log_handler, log_event
 from app.services.pipeline import run_fdd_cycle, run_metasys_keepalive, run_ml_cycle, run_poll_cycle, run_prayer_sync, run_tariff_update
 from app.services.pipeline_tracker import seed_demo_jobs
+from app.services.telemetry_store import (
+    TelemetryStoreUnavailableError,
+    get_telemetry_store_status,
+)
 
 
 scheduler = AsyncIOScheduler()
@@ -58,6 +63,16 @@ async def lifespan(app: FastAPI):
             "INGEST_API_KEY unset in production — ingest endpoint will reject requests",
             "مفتاح INGEST_API_KEY غير مُعد في الإنتاج",
         )
+
+    telemetry_status = get_telemetry_store_status()
+    if telemetry_status["required"] and telemetry_status["status"] == "not_configured":
+        log_event(
+            "error",
+            f"Telemetry registry not configured: {telemetry_status.get('message')}",
+            "سجل القياس الدائم غير مُعد — مطلوب SUPABASE_SERVICE_KEY",
+        )
+    elif telemetry_status["backend"] == "supabase":
+        log_event("info", "Telemetry registry: durable Supabase backend", "سجل القياس: Supabase دائم")
 
     if settings.demo_mode:
         seed_demo_jobs()
@@ -96,6 +111,21 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(TelemetryStoreUnavailableError)
+async def telemetry_store_unavailable_handler(_request, exc: TelemetryStoreUnavailableError):
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": {
+                "en": str(exc),
+                "ar": "سجل القياس الدائم غير مُعد في الإنتاج",
+                "telemetry_store": "not_configured",
+            }
+        },
+    )
+
 
 settings = get_settings()
 app.add_middleware(RequestIdMiddleware)

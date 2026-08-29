@@ -31,6 +31,11 @@ $connections = Get-Json "$Backend/health/connections"
 if ($connections) {
     Write-Host "    influx=$($connections.influxdb) supabase=$($connections.supabase) jci=$($connections.jci_metasys)"
     Write-Host "    ingest_api=$($connections.ingest_api) alert_webhook=$($connections.alert_webhook)"
+    if ($connections.telemetry_store) {
+        $ts = $connections.telemetry_store
+        $tsColor = if ($ts.durable) { 'Green' } elseif ($ts.status -eq 'not_configured') { 'Red' } else { 'Yellow' }
+        Write-Host "    telemetry_store: backend=$($ts.backend) durable=$($ts.durable) status=$($ts.status)" -ForegroundColor $tsColor
+    }
 }
 
 $protocols = Get-Json "$Backend/health/protocols"
@@ -67,12 +72,30 @@ if ($alertTest) {
 }
 
 try {
-    $fe = Invoke-WebRequest -Uri $Frontend -TimeoutSec 15 -UseBasicParsing
-    Write-Host "OK  Frontend $($fe.StatusCode) $Frontend" -ForegroundColor Green
+    Invoke-RestMethod -Uri "$Backend/telemetry/batch" -Method Post -Body '{"gateway_id":"verify","tenant_id":"t1","building_id":"b1","readings":[]}' -ContentType 'application/json' -TimeoutSec 10 -ErrorAction Stop
+    Write-Host "WARN telemetry/batch accepted without API key" -ForegroundColor Yellow
+} catch {
+    if ($_.Exception.Response.StatusCode.value__ -in 401, 503) {
+        Write-Host "OK  telemetry/batch requires ingest key in production" -ForegroundColor Green
+    }
+}
+
+try {
+    Invoke-RestMethod -Uri "$Backend/gateways" -Method Get -TimeoutSec 10 -ErrorAction Stop | Out-Null
+    Write-Host "OK  GET /gateways reachable" -ForegroundColor Green
+} catch {
+    Write-Host "    GET /gateways: HTTP $($_.Exception.Response.StatusCode.value__)" -ForegroundColor Yellow
+}
+
+try {
+    $r = Invoke-WebRequest -Uri "$Frontend" -TimeoutSec 15 -UseBasicParsing
+    Write-Host "OK  Frontend $($r.StatusCode) $Frontend" -ForegroundColor Green
 } catch {
     Write-Host "FAIL Frontend: $_" -ForegroundColor Red
 }
 
 Write-Host ""
+Write-Host "Phase 3 Supabase tables: run python scripts/verify_supabase_tables.py"
+Write-Host "Migration 007: gateways, raw_points, point_current_state, telemetry_events"
 Write-Host "Supabase: run python scripts/verify_supabase_tables.py"
 Write-Host "Cutover: set DEMO_MODE=false when Metasys + Influx are ready (see scripts/PRODUCTION_ENV.md)"

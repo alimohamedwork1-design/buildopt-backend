@@ -55,6 +55,7 @@ class Settings(BaseSettings):
 
     ingest_api_key: str = Field(default="", alias="INGEST_API_KEY")
     poll_interval_seconds: int = Field(default=30, alias="POLL_INTERVAL_SECONDS")
+    telemetry_store_backend: str = Field(default="auto", alias="TELEMETRY_STORE_BACKEND")
 
     @property
     def cors_origins(self) -> List[str]:

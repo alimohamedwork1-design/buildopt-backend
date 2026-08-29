@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.freshness_engine import apply_quality_state, compute_freshness
+
+logger = logging.getLogger("buildopt.telemetry.store")
 
 
 def _utcnow() -> datetime:
@@ -424,25 +427,151 @@ class TelemetryStore:
         self._conn.commit()
 
 
-_store: Optional[TelemetryStore] = None
+_store: Optional[Any] = None
+_store_status: Dict[str, Any] = {}
 
 
-def get_telemetry_store() -> TelemetryStore:
-    global _store
+class TelemetryStoreUnavailableError(RuntimeError):
+    """Raised when production requires durable Supabase registry but it is not configured."""
+
+
+def _placeholder_key(key: str) -> bool:
+    return not key or key.startswith("your-")
+
+
+def _is_production_live(settings) -> bool:
+    if settings.app_env == "test":
+        return False
+    return not settings.demo_mode and settings.app_env.lower() in ("production", "prod")
+
+
+def resolve_telemetry_backend(settings) -> Tuple[str, Optional[str]]:
+    """Return (backend_kind, error_message). backend_kind: memory|sqlite|supabase|unavailable."""
+    backend = (settings.telemetry_store_backend or "auto").lower()
+
+    if settings.app_env == "test" or backend == "memory":
+        return "memory", None
+
+    if backend == "sqlite":
+        return "sqlite", None
+
+    url_ok = bool(settings.supabase_url) and not settings.supabase_url.startswith("https://your-")
+    service_ok = bool(settings.supabase_service_key) and not _placeholder_key(
+        settings.supabase_service_key
+    )
+
+    if backend == "supabase":
+        if not url_ok or not service_ok:
+            return (
+                "unavailable",
+                "TELEMETRY_STORE_BACKEND=supabase requires SUPABASE_URL and SUPABASE_SERVICE_KEY",
+            )
+        return "supabase", None
+
+    if url_ok and service_ok:
+        return "supabase", None
+
+    if _is_production_live(settings):
+        return (
+            "unavailable",
+            "Durable telemetry registry required in production (DEMO_MODE=false). "
+            "Set SUPABASE_URL and SUPABASE_SERVICE_KEY.",
+        )
+
+    return "sqlite", None
+
+
+def get_telemetry_store_status() -> Dict[str, Any]:
+    """Safe telemetry registry status for health endpoints — never includes secrets."""
+    from app.config import get_settings
+
+    settings = get_settings()
+    resolved, error = resolve_telemetry_backend(settings)
+
+    if _store is not None:
+        active_path = getattr(_store, "db_path", "unknown")
+        if active_path == "supabase":
+            active = "supabase"
+        elif active_path == ":memory:":
+            active = "memory"
+        else:
+            active = "sqlite"
+    else:
+        active = resolved if resolved != "unavailable" else "none"
+
+    required = _is_production_live(settings)
+    if resolved == "unavailable":
+        status = "not_configured"
+    elif active == "supabase":
+        status = "connected"
+    elif active == "sqlite" and required:
+        status = "degraded"
+    elif active in ("sqlite", "memory"):
+        status = "connected"
+    else:
+        status = "unknown"
+
+    durable = active == "supabase"
+    return {
+        "backend": active,
+        "durable": durable,
+        "required": required,
+        "status": status,
+        "message": error,
+    }
+
+
+def get_telemetry_store() -> Any:
+    global _store, _store_status
     if _store is None:
-        from app.config import get_settings
         import os
 
+        from app.config import get_settings
+
         settings = get_settings()
-        db_path = os.getenv("TELEMETRY_DB_PATH", "data/telemetry.db")
-        if settings.app_env == "test":
-            db_path = ":memory:"
-        _store = TelemetryStore(db_path)
+        resolved, error = resolve_telemetry_backend(settings)
+
+        if resolved == "unavailable":
+            _store_status = {
+                "backend": "none",
+                "durable": False,
+                "required": _is_production_live(settings),
+                "status": "not_configured",
+                "message": error,
+            }
+            raise TelemetryStoreUnavailableError(error or "telemetry_store_unavailable")
+
+        if resolved == "memory":
+            _store = TelemetryStore(":memory:")
+            logger.info("Telemetry registry: in-memory (test)")
+        elif resolved == "sqlite":
+            db_path = os.getenv("TELEMETRY_DB_PATH", "data/telemetry.db")
+            _store = TelemetryStore(db_path)
+            if _is_production_live(settings):
+                logger.warning(
+                    "Telemetry registry: SQLite (%s) — explicit TELEMETRY_STORE_BACKEND=sqlite in production",
+                    db_path,
+                )
+            else:
+                logger.info("Telemetry registry: SQLite (%s)", db_path)
+        elif resolved == "supabase":
+            from app.services.supabase_telemetry_store import SupabaseTelemetryStore
+
+            _store = SupabaseTelemetryStore(settings.supabase_url, settings.supabase_service_key)
+            logger.info("Telemetry registry: Supabase PostgREST (durable)")
+        else:
+            db_path = os.getenv("TELEMETRY_DB_PATH", "data/telemetry.db")
+            _store = TelemetryStore(db_path)
+
+        _store_status = get_telemetry_store_status()
     return _store
 
 
-def reset_telemetry_store(store: Optional[TelemetryStore] = None) -> None:
-    global _store
-    if _store and _store.db_path != ":memory:":
+def reset_telemetry_store(store: Optional[Any] = None) -> None:
+    global _store, _store_status
+    if _store and getattr(_store, "db_path", None) not in (":memory:", "supabase"):
+        _store.close()
+    elif _store and getattr(_store, "db_path", None) == "supabase":
         _store.close()
     _store = store
+    _store_status = get_telemetry_store_status() if store is not None else {}

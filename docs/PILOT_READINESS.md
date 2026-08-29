@@ -30,10 +30,11 @@ Status key: **PASS** · **PARTIAL** · **FAIL** · **BLOCKED**
 ## Blockers for production pilot
 
 1. **Real Metasys credentials** at customer site — BLOCKED on customer
-2. **`INGEST_API_KEY`** configured on Railway — BLOCKED on deployment
-3. **Supabase migration 007** applied for Postgres persistence — PARTIAL (SQLite fallback works for pilot dev)
-4. **InfluxDB** configured with `DEMO_MODE=false` — BLOCKED on deployment config
-5. **Customer `mapped_points.json`** on edge host — BLOCKED on customer
+2. **`INGEST_API_KEY`** configured on Railway — **PASS** (production `ingest_api=True`, batch endpoint requires key)
+3. **Supabase migration 007** applied for Postgres persistence — **PASS** (applied 2026-08-29; all Phase 3 tables verified)
+4. **InfluxDB** configured with `DEMO_MODE=false` — **PASS** (production `demo_mode=false`, Influx connected)
+5. **Supabase-backed telemetry registry** on Railway — **READY** (`SupabaseTelemetryStore`; auto when `SUPABASE_SERVICE_KEY` set; production rejects ephemeral SQLite fallback)
+6. **Customer `mapped_points.json`** on edge host — BLOCKED on customer
 
 ## Recommended Phase 4
 

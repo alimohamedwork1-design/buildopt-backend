@@ -18,9 +18,17 @@ MIGRATIONS = [
     Path(__file__).resolve().parent.parent / "supabase" / "migrations" / "002_bms_connections.sql",
     Path(__file__).resolve().parent.parent / "supabase" / "migrations" / "003_alert_acknowledge.sql",
     Path(__file__).resolve().parent.parent / "supabase" / "migrations" / "004_sync_bms_alert_rpc.sql",
+    Path(__file__).resolve().parent.parent / "supabase" / "migrations" / "007_telemetry_phase3.sql",
 ]
 
-TABLES = ["building_alerts", "bms_connections"]
+TABLES = [
+    ("building_alerts", "id"),
+    ("bms_connections", "id"),
+    ("gateways", "gateway_id"),
+    ("raw_points", "id"),
+    ("point_current_state", "point_id"),
+    ("telemetry_events", "event_id"),
+]
 
 
 def headers() -> dict:
@@ -30,12 +38,12 @@ def headers() -> dict:
     }
 
 
-def table_exists(table: str) -> bool:
+def table_exists(table: str, id_column: str = "id") -> bool:
     try:
         response = httpx.get(
             f"{SUPABASE_URL}/rest/v1/{table}",
             headers=headers(),
-            params={"select": "id", "limit": "1"},
+            params={"select": id_column, "limit": "1"},
             timeout=10.0,
         )
         return response.status_code == 200
@@ -78,8 +86,8 @@ def main() -> int:
         return 1
 
     ok = True
-    for table in TABLES:
-        exists = table_exists(table)
+    for table, id_col in TABLES:
+        exists = table_exists(table, id_col)
         print(f"{table}: {'OK' if exists else 'MISSING'}")
         ok = ok and exists
 

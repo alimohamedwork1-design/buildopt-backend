@@ -6,13 +6,14 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from app.database import get_influx_service
 from app.services.edge_heartbeat_store import edge_heartbeat_store
 from app.services.ingest_auth import authorize_gateway, verify_ingest_key
-from app.services.telemetry_pipeline import telemetry_pipeline
+from app.services.telemetry_pipeline import get_telemetry_pipeline
+from app.services.telemetry_store import TelemetryStoreUnavailableError
 from app.utils.arabic_utils import bilingual_success
 
 logger = logging.getLogger("buildopt.telemetry.api")
@@ -80,13 +81,23 @@ async def ingest_telemetry_batch(
             row["raw_unit"] = row["unit"]
         raw_readings.append(row)
 
-    result = telemetry_pipeline.process_batch(
-        gateway_id=body.gateway_id,
-        tenant_id=body.tenant_id,
-        building_id=body.building_id,
-        connector_id=body.connector_id,
-        readings=raw_readings,
-    )
+    try:
+        result = get_telemetry_pipeline().process_batch(
+            gateway_id=body.gateway_id,
+            tenant_id=body.tenant_id,
+            building_id=body.building_id,
+            connector_id=body.connector_id,
+            readings=raw_readings,
+        )
+    except TelemetryStoreUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "en": str(exc),
+                "ar": "سجل القياس الدائم غير مُعد في الإنتاج",
+                "telemetry_store": "not_configured",
+            },
+        ) from exc
 
     influx = get_influx_service()
     influx_state = influx.infrastructure_state()

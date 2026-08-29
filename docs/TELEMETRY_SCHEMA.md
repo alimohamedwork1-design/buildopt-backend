@@ -45,6 +45,19 @@ Stable `event_id` = SHA256(`gateway|building|connector|source_point|source_ts|va
 
 Cloud stores processed IDs in `telemetry_events` table.
 
+## Registry backends
+
+| Environment | `TELEMETRY_STORE_BACKEND` | Backend | Durability |
+|-------------|---------------------------|---------|------------|
+| Test | (default) | SQLite `:memory:` | Ephemeral |
+| Development / demo | `auto` without service key | SQLite file | Local dev only |
+| Production (`DEMO_MODE=false`) | `auto` + `SUPABASE_SERVICE_KEY` | Supabase PostgREST | **Durable** (migration 007) |
+| Production misconfigured | `auto` without service key | **NOT_CONFIGURED** | Ingest returns 503 — no silent SQLite fallback |
+
+Production requires **`SUPABASE_SERVICE_KEY`** (service role). The anon key is never used for registry writes.
+
+Health: `GET /api/v1/health/connections` → `telemetry_store.backend`, `durable`, `status`.
+
 ## Retention assumptions
 
 - Influx: default bucket retention (configure per deployment)
