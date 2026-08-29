@@ -53,9 +53,10 @@ class SupabaseTelemetryStore:
 
     db_path = "supabase"
 
-    def __init__(self, supabase_url: str, auth_key: str) -> None:
+    def __init__(self, supabase_url: str, auth_key: str, *, auth_mode: str = "service_role") -> None:
         self._base = supabase_url.rstrip("/") + "/rest/v1"
         self._key = auth_key
+        self.auth_mode = auth_mode
         self._client = httpx.Client(timeout=20.0)
 
     def close(self) -> None:

@@ -115,9 +115,24 @@ def test_production_status_not_configured_when_durable_missing(monkeypatch):
     monkeypatch.setenv("DEMO_MODE", "false")
     monkeypatch.setenv("TELEMETRY_STORE_BACKEND", "auto")
     monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    monkeypatch.delenv("TELEMETRY_INGEST_GATED_SUPABASE", raising=False)
     get_settings.cache_clear()
 
     status = get_telemetry_store_status()
     assert status["required"] is True
     assert status["status"] == "not_configured"
     assert status["durable"] is False
+
+
+def test_ingest_gated_supabase_when_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("TELEMETRY_INGEST_GATED_SUPABASE", "true")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "eyJ-test-anon-key")
+    monkeypatch.setenv("INGEST_API_KEY", "test-ingest-key")
+    monkeypatch.delenv("SUPABASE_SERVICE_KEY", raising=False)
+    get_settings.cache_clear()
+
+    backend, _ = resolve_telemetry_backend(get_settings())
+    assert backend == "supabase_ingest_gated"

@@ -446,7 +446,10 @@ def _is_production_live(settings) -> bool:
 
 
 def resolve_telemetry_backend(settings) -> Tuple[str, Optional[str]]:
-    """Return (backend_kind, error_message). backend_kind: memory|sqlite|supabase|unavailable."""
+    """Return (backend_kind, error_message).
+
+    backend_kind: memory | sqlite | supabase | supabase_ingest_gated | unavailable
+    """
     backend = (settings.telemetry_store_backend or "auto").lower()
 
     if settings.app_env == "test" or backend == "memory":
@@ -459,6 +462,8 @@ def resolve_telemetry_backend(settings) -> Tuple[str, Optional[str]]:
     service_ok = bool(settings.supabase_service_key) and not _placeholder_key(
         settings.supabase_service_key
     )
+    anon_ok = bool(settings.supabase_key) and not _placeholder_key(settings.supabase_key)
+    ingest_ok = bool(settings.ingest_api_key)
 
     if backend == "supabase":
         if not url_ok or not service_ok:
@@ -472,10 +477,21 @@ def resolve_telemetry_backend(settings) -> Tuple[str, Optional[str]]:
         return "supabase", None
 
     if _is_production_live(settings):
+        if (
+            settings.telemetry_ingest_gated_supabase
+            and url_ok
+            and anon_ok
+            and ingest_ok
+        ):
+            return (
+                "supabase_ingest_gated",
+                "Using ingest-gated Supabase REST (set SUPABASE_SERVICE_KEY when available)",
+            )
         return (
             "unavailable",
             "Durable telemetry registry required in production (DEMO_MODE=false). "
-            "Set SUPABASE_URL and SUPABASE_SERVICE_KEY.",
+            "Set SUPABASE_SERVICE_KEY or enable TELEMETRY_INGEST_GATED_SUPABASE with "
+            "SUPABASE_URL, SUPABASE_KEY, and INGEST_API_KEY.",
         )
 
     return "sqlite", None
@@ -490,8 +506,9 @@ def get_telemetry_store_status() -> Dict[str, Any]:
 
     if _store is not None:
         active_path = getattr(_store, "db_path", "unknown")
+        auth_mode = getattr(_store, "auth_mode", None)
         if active_path == "supabase":
-            active = "supabase"
+            active = "supabase_ingest_gated" if auth_mode == "ingest_gated" else "supabase"
         elif active_path == ":memory:":
             active = "memory"
         else:
@@ -502,8 +519,8 @@ def get_telemetry_store_status() -> Dict[str, Any]:
     required = _is_production_live(settings)
     if resolved == "unavailable":
         status = "not_configured"
-    elif active == "supabase":
-        status = "connected"
+    elif active in ("supabase", "supabase_ingest_gated"):
+        status = "connected" if active == "supabase" else "degraded"
     elif active == "sqlite" and required:
         status = "degraded"
     elif active in ("sqlite", "memory"):
@@ -511,13 +528,16 @@ def get_telemetry_store_status() -> Dict[str, Any]:
     else:
         status = "unknown"
 
-    durable = active == "supabase"
+    durable = active in ("supabase", "supabase_ingest_gated")
     return {
         "backend": active,
         "durable": durable,
         "required": required,
         "status": status,
         "message": error,
+        "auth_mode": "service_role" if active == "supabase" else (
+            "ingest_gated" if active == "supabase_ingest_gated" else None
+        ),
     }
 
 
@@ -554,11 +574,20 @@ def get_telemetry_store() -> Any:
                 )
             else:
                 logger.info("Telemetry registry: SQLite (%s)", db_path)
-        elif resolved == "supabase":
+        elif resolved in ("supabase", "supabase_ingest_gated"):
             from app.services.supabase_telemetry_store import SupabaseTelemetryStore
 
-            _store = SupabaseTelemetryStore(settings.supabase_url, settings.supabase_service_key)
-            logger.info("Telemetry registry: Supabase PostgREST (durable)")
+            if resolved == "supabase":
+                auth_key = settings.supabase_service_key
+                auth_mode = "service_role"
+                logger.info("Telemetry registry: Supabase PostgREST (service_role)")
+            else:
+                auth_key = settings.supabase_key
+                auth_mode = "ingest_gated"
+                logger.warning(
+                    "Telemetry registry: Supabase PostgREST ingest-gated (set SUPABASE_SERVICE_KEY when available)"
+                )
+            _store = SupabaseTelemetryStore(settings.supabase_url, auth_key, auth_mode=auth_mode)
         else:
             db_path = os.getenv("TELEMETRY_DB_PATH", "data/telemetry.db")
             _store = TelemetryStore(db_path)
