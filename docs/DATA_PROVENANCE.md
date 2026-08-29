@@ -30,30 +30,22 @@ Tenant
 
 6. **Frontend display** — Live Telemetry shows source name, quality, freshness state, and connector. No mock substitution in live mode.
 
-## Pilot bootstrap: mapped_points.json
+## Pilot bootstrap: mapped_points.json (fallback)
 
-For Phase 3 pilot, edge may still load `config/mapped_points.json` (gitignored). Flow:
+For Phase 3–4 pilot, edge may load `config/mapped_points.json` (gitignored) **or** fetch approved config from cloud.
 
 ```
-mapped_points.json (bootstrap)
-  → Edge discovery sync
+Metasys Discovery
   → Raw Point Registry
-  → Telemetry collection
-  → (Future) Semantic Mapping layer
+  → Semantic Suggestions + Human Approval
+  → GET /gateways/{gateway_id}/collection-config
+  → Edge Collection (approved points only)
 ```
 
-Manual JSON is **not** the permanent architecture — it bootstraps until Metasys discovery → registry → approved collection config is fully automated.
+Manual JSON is bootstrap/fallback — not the permanent architecture.
 
-## Legacy agent
+## Gateway auth (Phase 4)
 
-`edge/agent.py` is **deprecated**. It posted unprovenanced snapshots to `/ingest/live`. Production path is `buildopt-edge/` → `/telemetry/batch` with full provenance.
-
-## Future auth upgrade path
-
-Phase 3 retains shared `X-API-Key` for pilot bootstrap. Planned upgrades:
-
-- Per-gateway scoped tokens
-- Certificate-based gateway identity
-- mTLS for edge ↔ cloud
-
-Server-side gateway binding already prevents tenant/building spoofing regardless of payload claims.
+- **Production edge:** `GATEWAY_API_KEY` scoped token (`bo_gw_*`)
+- **Ops/bootstrap:** master `INGEST_API_KEY` for token issuance only
+- Per-gateway tokens stored as SHA-256 hashes (migration 008)

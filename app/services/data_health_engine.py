@@ -84,6 +84,65 @@ def aggregate_health(point_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def registry_point_health(point: Dict[str, Any]) -> Dict[str, Any]:
+    """Assess health for a Phase 3 registry point with current state."""
+    current = point.get("current") or {}
+    val = current.get("last_value")
+    if val is None:
+        val = current.get("last_value_text")
+    ts = current.get("last_source_timestamp") or current.get("last_cloud_received_at")
+    parsed_ts = None
+    if ts:
+        try:
+            parsed_ts = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if parsed_ts.tzinfo is None:
+                parsed_ts = parsed_ts.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            parsed_ts = None
+
+    interval = point.get("expected_interval_seconds") or current.get("expected_interval_seconds") or 300
+    health = assess_point_health(
+        value=val,
+        timestamp=parsed_ts,
+        expected_interval_seconds=int(interval),
+    )
+    freshness_state = current.get("freshness_state")
+    if freshness_state == "STALE":
+        health["status"] = "STALE"
+    elif freshness_state == "OFFLINE":
+        health["status"] = "OFFLINE"
+    elif freshness_state == "LIVE" and health["status"] in ("UNKNOWN", "OFFLINE"):
+        health["status"] = "GOOD"
+
+    return {
+        "point_id": point.get("id"),
+        "point_key": point.get("source_name") or point.get("source_point_id"),
+        "source_point_id": point.get("source_point_id"),
+        "source": point.get("source"),
+        "semantic_key": (point.get("metadata") or {}).get("semantic_key"),
+        "gateway_id": point.get("gateway_id"),
+        "connector_id": point.get("connector_id"),
+        "freshness_state": freshness_state,
+        "last_value": val,
+        "last_source_timestamp": current.get("last_source_timestamp"),
+        "last_cloud_received_at": current.get("last_cloud_received_at"),
+        "source_quality": current.get("source_quality"),
+        "normalized_quality": current.get("normalized_quality"),
+        "expected_interval_seconds": interval,
+        **health,
+    }
+
+
+def registry_building_data_health(points: List[Dict[str, Any]]) -> Dict[str, Any]:
+    point_results = [registry_point_health(p) for p in points if p]
+    return {
+        "building_summary": aggregate_health(point_results),
+        "points": point_results,
+        "computed_at": datetime.now(timezone.utc).isoformat(),
+        "source": "registry",
+    }
+
+
 def building_data_health(
     mapped_points: Dict[str, Any],
     live_values: Dict[str, Any],

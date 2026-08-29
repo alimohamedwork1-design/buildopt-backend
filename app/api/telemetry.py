@@ -55,7 +55,7 @@ async def ingest_telemetry_batch(
     body: TelemetryBatchRequest,
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
-    verify_ingest_key(x_api_key)
+    verify_ingest_key(x_api_key, gateway_id=body.gateway_id)
     authorize_gateway(
         gateway_id=body.gateway_id,
         tenant_id=body.tenant_id,

@@ -146,6 +146,13 @@ class SupabaseTelemetryStore:
             out[key] = _as_iso(out.get(key))
         return out
 
+    @staticmethod
+    def _normalize_token_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(row)
+        for key in ("created_at", "revoked_at", "expires_at"):
+            out[key] = _as_iso(out.get(key))
+        return out
+
     # ---- Gateways ----
 
     def register_gateway(
@@ -437,6 +444,69 @@ class SupabaseTelemetryStore:
             if point:
                 out.append(point)
         return out
+
+    def update_point_metadata(self, point_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        self._request(
+            "PATCH",
+            "raw_points",
+            params={"id": f"eq.{point_id}"},
+            json_body={"metadata": metadata or {}, "updated_at": now},
+            prefer="return=minimal",
+        )
+        return self.get_point(point_id) or {}
+
+    def create_gateway_token(
+        self,
+        *,
+        token_id: str,
+        gateway_id: str,
+        token_hash: str,
+        label: str,
+        expires_at: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        row = {
+            "token_id": token_id,
+            "gateway_id": gateway_id,
+            "token_hash": token_hash,
+            "label": label,
+            "created_at": now,
+            "expires_at": _iso(expires_at),
+        }
+        self._request("POST", "gateway_tokens", json_body=row, prefer="return=minimal")
+        return {**row, "created_at": now}
+
+    def get_gateway_token_by_hash(self, token_hash: str) -> Optional[Dict[str, Any]]:
+        rows = self._request(
+            "GET",
+            "gateway_tokens",
+            params={"token_hash": f"eq.{token_hash}", "limit": "1"},
+        ).json()
+        return self._normalize_token_row(rows[0]) if rows else None
+
+    def revoke_gateway_token(self, token_id: str) -> bool:
+        now = _iso(_utcnow())
+        response = self._request(
+            "PATCH",
+            "gateway_tokens",
+            params={"token_id": f"eq.{token_id}", "revoked_at": "is.null"},
+            json_body={"revoked_at": now},
+            prefer="return=minimal",
+        )
+        return response.status_code < 400
+
+    def list_gateway_tokens(self, gateway_id: str) -> List[Dict[str, Any]]:
+        rows = self._request(
+            "GET",
+            "gateway_tokens",
+            params={
+                "gateway_id": f"eq.{gateway_id}",
+                "select": "token_id,gateway_id,label,created_at,revoked_at,expires_at",
+                "order": "created_at.desc",
+            },
+        ).json()
+        return [self._normalize_token_row(r) for r in rows]
 
     # ---- Idempotency ----
 

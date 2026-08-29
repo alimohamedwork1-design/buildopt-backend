@@ -6,6 +6,29 @@ from app.models.schemas import LiveBuildingData, EnvironmentData, EnergyData, HV
 
 logger = logging.getLogger("buildopt.influx")
 
+ALLOWED_AGGREGATE_WINDOWS = frozenset({"1m", "5m", "15m", "30m", "1h", "2h"})
+MAX_HISTORY_HOURS = 168
+MAX_HISTORY_POINTS = 2000
+
+
+def _flux_safe_tag(value: str) -> str:
+    import re
+
+    if not value or not re.fullmatch(r"[\w\-.:]+", value):
+        raise ValueError("invalid_flux_tag")
+    return value.replace('"', "")
+
+
+def _clamp_hours(hours: int) -> int:
+    return max(1, min(int(hours), MAX_HISTORY_HOURS))
+
+
+def _normalize_every(every: str) -> str:
+    normalized = (every or "15m").strip()
+    if normalized not in ALLOWED_AGGREGATE_WINDOWS:
+        raise ValueError("invalid_aggregate_window")
+    return normalized
+
 
 class InfluxService:
     def __init__(
@@ -171,6 +194,113 @@ class InfluxService:
             return results
         except Exception as exc:
             logger.warning("InfluxDB query_health_history failed: %s", exc)
+            return []
+
+    def query_telemetry_point_history(
+        self,
+        *,
+        point_id: str,
+        building_id: str,
+        hours: int = 24,
+        every: str = "5m",
+    ) -> List[Dict[str, Any]]:
+        """Return time-series for a registry point from telemetry_point measurement."""
+        if self.demo_mode or self._client is None:
+            return []
+
+        try:
+            hours = _clamp_hours(hours)
+            every = _normalize_every(every)
+            safe_building = _flux_safe_tag(building_id)
+            safe_point = _flux_safe_tag(point_id)
+            start = f"-{hours}h"
+            flux = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: {start})
+              |> filter(fn: (r) => r["_measurement"] == "telemetry_point")
+              |> filter(fn: (r) => r["building_id"] == "{safe_building}")
+              |> filter(fn: (r) => r["point_id"] == "{safe_point}")
+              |> filter(fn: (r) => r["_field"] == "value")
+              |> aggregateWindow(every: {every}, fn: mean, createEmpty: false)
+              |> limit(n: {MAX_HISTORY_POINTS})
+            '''
+            tables = self._client.query_api().query(flux, org=self.org)
+            results: List[Dict[str, Any]] = []
+            for table in tables:
+                for record in table.records:
+                    ts = record.get_time()
+                    if ts and ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    results.append(
+                        {
+                            "timestamp": ts.isoformat().replace("+00:00", "Z") if ts else "",
+                            "value": float(record.get_value()),
+                            "point_id": point_id,
+                        }
+                    )
+            return sorted(results, key=lambda r: r["timestamp"])
+        except ValueError as exc:
+            logger.warning("InfluxDB query_telemetry_point_history invalid input: %s", exc)
+            return []
+        except Exception as exc:
+            logger.warning("InfluxDB query_telemetry_point_history failed: %s", exc)
+            return []
+
+    def query_building_telemetry_history(
+        self,
+        building_id: str,
+        *,
+        hours: int = 24,
+        every: str = "15m",
+        point_ids: Optional[List[str]] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Aggregate telemetry_point history for a building (optionally filtered by point_ids)."""
+        if self.demo_mode or self._client is None:
+            return []
+
+        try:
+            hours = _clamp_hours(hours)
+            every = _normalize_every(every)
+            safe_building = _flux_safe_tag(building_id)
+            row_limit = max(1, min(int(limit), MAX_HISTORY_POINTS))
+            start = f"-{hours}h"
+            point_filter = ""
+            if point_ids:
+                safe_ids = [_flux_safe_tag(pid) for pid in point_ids[:20]]
+                ids = " or ".join(f'r["point_id"] == "{pid}"' for pid in safe_ids)
+                point_filter = f'|> filter(fn: (r) => {ids})'
+            flux = f'''
+            from(bucket: "{self.bucket}")
+              |> range(start: {start})
+              |> filter(fn: (r) => r["_measurement"] == "telemetry_point")
+              |> filter(fn: (r) => r["building_id"] == "{safe_building}")
+              |> filter(fn: (r) => r["_field"] == "value")
+              {point_filter}
+              |> aggregateWindow(every: {every}, fn: mean, createEmpty: false)
+              |> limit(n: {row_limit})
+            '''
+            tables = self._client.query_api().query(flux, org=self.org)
+            results: List[Dict[str, Any]] = []
+            for table in tables:
+                for record in table.records:
+                    ts = record.get_time()
+                    if ts and ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    results.append(
+                        {
+                            "timestamp": ts.isoformat().replace("+00:00", "Z") if ts else "",
+                            "value": float(record.get_value()),
+                            "point_id": record.values.get("point_id", ""),
+                            "source_point_id": record.values.get("source_point_id", ""),
+                        }
+                    )
+            return sorted(results, key=lambda r: r["timestamp"])
+        except ValueError as exc:
+            logger.warning("InfluxDB query_building_telemetry_history invalid input: %s", exc)
+            return []
+        except Exception as exc:
+            logger.warning("InfluxDB query_building_telemetry_history failed: %s", exc)
             return []
 
     def query_hourly_kw(self, building_id: str, hours: int = 24) -> List[Dict[str, Any]]:

@@ -11,7 +11,10 @@ from app.config import get_settings
 from app.deps.auth import get_optional_user
 from app.models.user_context import UserContext
 from app.services.edge_heartbeat_store import edge_heartbeat_store
-from app.services.ingest_auth import authorize_gateway, verify_ingest_key
+from app.services.ingest_auth import authorize_gateway, verify_ingest_key, verify_master_ingest_key
+from app.services.semantic_mapping_service import build_collection_config
+from app.services.telemetry_store import get_telemetry_store
+from app.services.gateway_token_store import get_gateway_token_store
 from app.utils.arabic_utils import bilingual_error, bilingual_success
 from fastapi import Depends
 
@@ -46,7 +49,7 @@ async def gateway_heartbeat(
     body: GatewayHeartbeat,
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
-    verify_ingest_key(x_api_key)
+    verify_ingest_key(x_api_key, gateway_id=body.gateway_id)
     authorize_gateway(
         gateway_id=body.gateway_id,
         tenant_id=body.tenant_id,
@@ -112,3 +115,87 @@ async def list_gateways(
         allowed = set(user.building_ids)
         gateways = [g for g in gateways if g.get("building_id") in allowed]
     return {"gateways": gateways}
+
+
+class IssueTokenRequest(BaseModel):
+    label: str = "edge"
+    expires_in_days: int | None = None
+
+
+@router.post("/{gateway_id}/tokens")
+async def issue_gateway_token(
+    gateway_id: str,
+    body: IssueTokenRequest,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Issue a scoped ingest token for a single gateway (shown once)."""
+    verify_master_ingest_key(x_api_key)
+    store = get_gateway_token_store()
+    expires_at = None
+    if body.expires_in_days:
+        expires_at = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        from datetime import timedelta
+
+        expires_at = expires_at + timedelta(days=body.expires_in_days)
+    issued = store.issue(gateway_id=gateway_id, label=body.label, expires_at=expires_at)
+    return {
+        "gateway_id": gateway_id,
+        "token_id": issued["token_id"],
+        "token": issued["token"],
+        "label": issued.get("label"),
+        "expires_at": issued.get("expires_at"),
+        "message": bilingual_success(
+            "Gateway token issued — store securely; it will not be shown again",
+            "تم إصدار رمز البوابة — احفظه بأمان",
+        ),
+    }
+
+
+@router.get("/{gateway_id}/tokens")
+async def list_gateway_tokens(
+    gateway_id: str,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    verify_master_ingest_key(x_api_key)
+    tokens = get_gateway_token_store().list_for_gateway(gateway_id)
+    return {"gateway_id": gateway_id, "tokens": tokens}
+
+
+@router.delete("/{gateway_id}/tokens/{token_id}")
+async def revoke_gateway_token(
+    gateway_id: str,
+    token_id: str,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    verify_master_ingest_key(x_api_key)
+    ok = get_gateway_token_store().revoke(token_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail=bilingual_error("Token not found", "الرمز غير موجود"))
+    return {
+        "gateway_id": gateway_id,
+        "token_id": token_id,
+        "revoked": True,
+        "message": bilingual_success("Gateway token revoked", "تم إلغاء رمز البوابة"),
+    }
+
+
+@router.get("/{gateway_id}/collection-config")
+async def gateway_collection_config(
+    gateway_id: str,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Edge-authenticated approved collection config (gateway token or master key)."""
+    verify_ingest_key(x_api_key, gateway_id=gateway_id)
+    store = get_telemetry_store()
+    gw = store.get_gateway(gateway_id)
+    if not gw:
+        raise HTTPException(status_code=404, detail=bilingual_error("Gateway not registered", "البوابة غير مسجلة"))
+    points, _ = store.list_points(building_id=gw["building_id"], gateway_id=gateway_id, limit=500)
+    config = build_collection_config(points, building_id=gw["building_id"], gateway_id=gateway_id)
+    if not config.get("mapping"):
+        config["state"] = "NO_APPROVED_MAPPINGS"
+    else:
+        config["state"] = "OK"
+    return config

@@ -51,10 +51,11 @@ Cloud stores processed IDs in `telemetry_events` table.
 |-------------|---------------------------|---------|------------|
 | Test | (default) | SQLite `:memory:` | Ephemeral |
 | Development / demo | `auto` without service key | SQLite file | Local dev only |
-| Production (`DEMO_MODE=false`) | `auto` + `SUPABASE_SERVICE_KEY` | Supabase PostgREST | **Durable** (migration 007) |
-| Production misconfigured | `auto` without service key | **NOT_CONFIGURED** | Ingest returns 503 — no silent SQLite fallback |
+| Production (Lovable Cloud) | `auto` + `TELEMETRY_INGEST_GATED_SUPABASE=true` | Supabase PostgREST (ingest-gated) | **Durable** (migration 007) |
+| Production (self-hosted Supabase) | `auto` + `SUPABASE_SERVICE_KEY` | Supabase PostgREST (service_role) | **Durable** |
+| Production misconfigured | `auto` without ingest-gated or service key | **NOT_CONFIGURED** | Ingest returns 503 — no silent SQLite fallback |
 
-Production requires **`SUPABASE_SERVICE_KEY`** (service role). The anon key is never used for registry writes.
+**Lovable Cloud users** do not need a separate Supabase account or `SUPABASE_SERVICE_KEY`. Railway uses `SUPABASE_URL` + `SUPABASE_KEY` (publishable) from Lovable, with `INGEST_API_KEY` enforcing writes at the backend API layer.
 
 Health: `GET /api/v1/health/connections` → `telemetry_store.backend`, `durable`, `status`.
 
@@ -95,3 +96,19 @@ When Influx is not configured (`DEMO_MODE=true` or missing token), API returns:
 ```
 
 Current point state remains available via Postgres/SQLite registry regardless of Influx.
+
+## Phase 4 — History API
+
+`GET /api/v1/buildings/{building_id}/telemetry/history`
+
+| Param | Bounds |
+|-------|--------|
+| `hours` | 1–168 |
+| `limit` | 1–2000 |
+| `every` | `1m`, `5m`, `15m`, `30m`, `1h`, `2h` |
+
+Returns typed states: `OK`, `NO_DATA`, `INFLUX_UNAVAILABLE`. Flux tags sanitized; point_id validated against registry.
+
+## Phase 4 — Gateway tokens (migration 008)
+
+Table `gateway_tokens`: `token_hash` unique, FK to `gateways`. Plaintext never stored. Edge uses `GATEWAY_API_KEY` (`bo_gw_*`).

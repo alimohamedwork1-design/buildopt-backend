@@ -15,15 +15,18 @@ BuildOpt Edge  ──HTTPS outbound──▶  BuildOpt Cloud API
 
 ## Quick start
 
-1. Copy mapped points: `config/mapped_points.json` — logical key → Metasys object ID
-2. Set environment (never commit passwords):
+1. **Preferred:** Issue scoped token via cloud ops (`POST /gateways/{id}/tokens`), set `GATEWAY_API_KEY=bo_gw_...`
+2. **Fallback bootstrap:** copy `config/mapped_points.json.example` → `mapped_points.json`
+3. Set environment (never commit passwords):
 
 ```bash
 export BUILDING_ID=your-building-id
+export GATEWAY_ID=your-gateway-id
+export GATEWAY_API_KEY=bo_gw_...   # scoped edge token (preferred)
+# export INGEST_API_KEY=...        # ops/bootstrap only — not required on edge when GATEWAY_API_KEY set
 export METASYS_HOST=https://metasys.site.local
 export METASYS_USERNAME=...
 export METASYS_PASSWORD=...
-export INGEST_API_KEY=...
 export CLOUD_API_URL=https://buildopt-backend-production.up.railway.app
 ```
 

@@ -26,12 +26,19 @@ Refrigeration vertical uses separate semantics (compressor, evaporator, NH3 safe
 
 ---
 
-## Mapping pipeline
+## Mapping pipeline (Phase 4 — Registry V2)
 
-DISCOVER → EXTRACT → NORMALIZE → CLASSIFY → RELATE → VALIDATE → APPROVE
+DISCOVER → REGISTRY → SUGGEST → REVIEW → APPROVE → COLLECTION CONFIG → EDGE
 
-Code: `metasys_auto_mapper.py`, `excel_import.py`  
-Thresholds: >=0.95 auto-candidate, 0.75–0.95 review, <0.75 unmapped
+| Step | Endpoint |
+|------|----------|
+| Registry | `POST /discovery/points/batch` |
+| Suggestions | `GET /semantic/buildings/{id}/suggestions` |
+| Approval | `POST /semantic/buildings/{id}/approve` |
+| Edge export | `GET /gateways/{gateway_id}/collection-config` |
+
+Code: `semantic_mapping_service.py`, `semantic_mapper.py`, `metasys_auto_mapper.py`  
+Thresholds: ≥0.95 auto-candidate, 0.75–0.95 review, <0.75 unmapped — **never auto-approved without explicit POST**
 
 ---
 

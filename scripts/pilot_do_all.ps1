@@ -39,7 +39,7 @@ Pop-Location
 
 Write-Host "`n=== Manual steps remaining ===" -ForegroundColor Cyan
 Write-Host "  - Customer site: deploy buildopt-edge Docker + mapped_points.json"
-Write-Host "  - Railway: set SUPABASE_SERVICE_KEY for durable telemetry registry (auto when configured)"
+Write-Host "  - Lovable Cloud: TELEMETRY_INGEST_GATED_SUPABASE=true (no Supabase dashboard account needed)"
 Write-Host "  - Docker: buildopt-edge image build where Docker CLI is installed"
 
 if (-not $supaOk) { exit 1 }

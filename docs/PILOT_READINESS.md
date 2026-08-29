@@ -33,9 +33,24 @@ Status key: **PASS** · **PARTIAL** · **FAIL** · **BLOCKED**
 2. **`INGEST_API_KEY`** configured on Railway — **PASS** (production `ingest_api=True`, batch endpoint requires key)
 3. **Supabase migration 007** applied for Postgres persistence — **PASS** (applied 2026-08-29; all Phase 3 tables verified)
 4. **InfluxDB** configured with `DEMO_MODE=false` — **PASS** (production `demo_mode=false`, Influx connected)
-5. **Supabase-backed telemetry registry** on Railway — **READY** (`SupabaseTelemetryStore`; auto when `SUPABASE_SERVICE_KEY` set; production rejects ephemeral SQLite fallback)
+5. **Supabase-backed telemetry registry** on Railway — **PASS** (Lovable Cloud ingest-gated mode; `durable=true`, migration 007 applied)
 6. **Customer `mapped_points.json`** on edge host — BLOCKED on customer
 
 ## Recommended Phase 4
 
 Semantic Mapping V2 (approved collection config from registry), Influx history queries in UI, data-health per-point drilldown, per-gateway scoped tokens.
+
+## Phase 4 — implemented (2026-08-29)
+
+| # | Feature | Status | Notes |
+|---|---------|--------|-------|
+| 1 | Semantic Mapping V2 from registry | **PASS** | `GET/POST /semantic/buildings/{id}/suggestions|approve|collection-config` |
+| 2 | Influx `telemetry_point` history in UI | **PASS** | `GET /buildings/{id}/telemetry/history` + LiveTelemetry chart |
+| 3 | Registry-backed data health drilldown | **PASS** | `GET /data-health/points/{id}` + DataHealth panel |
+| 4 | Per-gateway scoped ingest tokens | **PASS** | `POST/GET/DELETE /gateways/{id}/tokens` + migration 008 |
+
+**Migration 008** (`gateway_tokens`) applied to Lovable Cloud DB.
+
+**Edge collection config:** `GET /api/v1/semantic/buildings/{id}/collection-config` replaces manual `mapped_points.json` once mappings are approved in registry.
+
+**Gateway tokens:** Issue via `POST /gateways/{gateway_id}/tokens` with master `INGEST_API_KEY`; edge uses scoped `bo_gw_*` token instead of shared key.

@@ -109,6 +109,17 @@ class TelemetryStore:
 
             create index if not exists raw_points_building_idx on raw_points(building_id);
             create index if not exists raw_points_gateway_idx on raw_points(gateway_id);
+
+            create table if not exists gateway_tokens (
+                token_id text primary key,
+                gateway_id text not null,
+                token_hash text not null unique,
+                label text,
+                created_at text not null,
+                revoked_at text,
+                expires_at text
+            );
+            create index if not exists gateway_tokens_gateway_idx on gateway_tokens(gateway_id);
             """
         )
         self._conn.commit()
@@ -401,6 +412,69 @@ class TelemetryStore:
                 out.append(point)
         return out
 
+    def update_point_metadata(self, point_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        self._conn.execute(
+            "update raw_points set metadata=?, updated_at=? where id=?",
+            (json.dumps(metadata or {}), now, point_id),
+        )
+        self._conn.commit()
+        return self.get_point(point_id) or {}
+
+    # ---- Gateway tokens ----
+
+    def create_gateway_token(
+        self,
+        *,
+        token_id: str,
+        gateway_id: str,
+        token_hash: str,
+        label: str,
+        expires_at: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        self._conn.execute(
+            """
+            insert into gateway_tokens (token_id, gateway_id, token_hash, label, created_at, revoked_at, expires_at)
+            values (?, ?, ?, ?, ?, null, ?)
+            """,
+            (token_id, gateway_id, token_hash, label, now, _iso(expires_at)),
+        )
+        self._conn.commit()
+        return {
+            "token_id": token_id,
+            "gateway_id": gateway_id,
+            "label": label,
+            "created_at": now,
+            "expires_at": _iso(expires_at),
+        }
+
+    def get_gateway_token_by_hash(self, token_hash: str) -> Optional[Dict[str, Any]]:
+        row = self._conn.execute(
+            "select * from gateway_tokens where token_hash=?",
+            (token_hash,),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def revoke_gateway_token(self, token_id: str) -> bool:
+        now = _iso(_utcnow())
+        cur = self._conn.execute(
+            "update gateway_tokens set revoked_at=? where token_id=? and revoked_at is null",
+            (now, token_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def list_gateway_tokens(self, gateway_id: str) -> List[Dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            select token_id, gateway_id, label, created_at, revoked_at, expires_at
+            from gateway_tokens where gateway_id=? order by created_at desc
+            """,
+            (gateway_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # ---- Idempotency ----
 
     def is_event_processed(self, event_id: str) -> bool:
@@ -485,12 +559,12 @@ def resolve_telemetry_backend(settings) -> Tuple[str, Optional[str]]:
         ):
             return (
                 "supabase_ingest_gated",
-                "Using ingest-gated Supabase REST (set SUPABASE_SERVICE_KEY when available)",
+                "Lovable Cloud registry via ingest-gated Supabase REST (no Supabase dashboard account required)",
             )
         return (
             "unavailable",
             "Durable telemetry registry required in production (DEMO_MODE=false). "
-            "Set SUPABASE_SERVICE_KEY or enable TELEMETRY_INGEST_GATED_SUPABASE with "
+            "For Lovable Cloud: set TELEMETRY_INGEST_GATED_SUPABASE=true with "
             "SUPABASE_URL, SUPABASE_KEY, and INGEST_API_KEY.",
         )
 
@@ -520,7 +594,7 @@ def get_telemetry_store_status() -> Dict[str, Any]:
     if resolved == "unavailable":
         status = "not_configured"
     elif active in ("supabase", "supabase_ingest_gated"):
-        status = "connected" if active == "supabase" else "degraded"
+        status = "connected"
     elif active == "sqlite" and required:
         status = "degraded"
     elif active in ("sqlite", "memory"):
@@ -584,8 +658,8 @@ def get_telemetry_store() -> Any:
             else:
                 auth_key = settings.supabase_key
                 auth_mode = "ingest_gated"
-                logger.warning(
-                    "Telemetry registry: Supabase PostgREST ingest-gated (set SUPABASE_SERVICE_KEY when available)"
+                logger.info(
+                    "Telemetry registry: Lovable Cloud ingest-gated Supabase REST (durable Postgres)"
                 )
             _store = SupabaseTelemetryStore(settings.supabase_url, auth_key, auth_mode=auth_mode)
         else:

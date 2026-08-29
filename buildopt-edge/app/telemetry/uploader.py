@@ -22,9 +22,22 @@ class CloudUploader:
 
     def _headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if self.settings.ingest_api_key:
-            headers["X-API-Key"] = self.settings.ingest_api_key
+        if self.settings.api_key:
+            headers["X-API-Key"] = self.settings.api_key
         return headers
+
+    async def fetch_collection_config(self) -> Dict[str, str]:
+        """Load approved mapping from cloud registry (requires gateway or master key)."""
+        if not self.settings.api_key:
+            return {}
+        url = f"{self.settings.cloud_api_url}/api/v1/gateways/{self.settings.gateway_id}/collection-config"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(url, headers=self._headers())
+            if r.status_code != 200:
+                return {}
+            body = r.json()
+            mapping = body.get("mapping") or {}
+            return mapping if isinstance(mapping, dict) else {}
 
     def _telemetry_rate_per_minute(self) -> float:
         now = datetime.now(timezone.utc).timestamp()

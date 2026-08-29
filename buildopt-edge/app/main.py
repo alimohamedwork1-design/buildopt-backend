@@ -132,6 +132,22 @@ def mapping_to_discovery_points(mapping: Dict[str, str], connector_id: str) -> L
     ]
 
 
+async def resolve_collection_mapping(settings: EdgeSettings, uploader: CloudUploader) -> Dict[str, str]:
+    """Bootstrap mapped_points.json first; else approved cloud collection config."""
+    bootstrap = load_mapped_points(settings.mapped_points_file)
+    if bootstrap:
+        logger.info("Using bootstrap mapped_points.json (%d approved keys)", len(bootstrap))
+        return bootstrap
+    cloud_mapping = await uploader.fetch_collection_config()
+    if cloud_mapping:
+        logger.info("Using approved cloud collection config (%d keys)", len(cloud_mapping))
+        return cloud_mapping
+    logger.error(
+        "NOT CONFIGURED — no bootstrap mapped_points.json and no approved cloud collection config"
+    )
+    return {}
+
+
 async def run_edge() -> None:
     global _shutdown
     signal.signal(signal.SIGINT, _handle_shutdown)
@@ -144,10 +160,15 @@ async def run_edge() -> None:
     queue = LocalQueue(settings.queue_db_path)
     uploader = CloudUploader(settings)
     connector = build_connector(settings)
-    mapping = load_mapped_points(settings.mapped_points_file)
+    mapping = await resolve_collection_mapping(settings, uploader)
 
     if mapping:
         await uploader.sync_discovery(mapping_to_discovery_points(mapping, settings.connector))
+    else:
+        await uploader.send_heartbeat(
+            connector_status="NOT_CONFIGURED",
+            connector_error="No approved collection config or bootstrap mapping",
+        )
 
     logger.info(
         "Starting gateway=%s building=%s connector=%s cloud=%s",
@@ -170,38 +191,46 @@ async def run_edge() -> None:
                     connector_error=health.get("message"),
                 )
             else:
-                readings = await collect_readings(
-                    connector,
-                    mapping,
-                    settings.building_id,
-                    settings.gateway_id,
-                    settings.connector,
-                    settings.tenant_id,
-                )
-                if readings:
-                    batch = normalize_batch(
-                        readings,
+                if not mapping:
+                    await uploader.send_heartbeat(
+                        connector_status="NOT_CONFIGURED",
+                        queue_depth=q_metrics["queue_depth"],
+                        oldest_queued_event_seconds=q_metrics["oldest_queued_event_seconds"],
+                        connector_error="Awaiting approved collection config",
+                    )
+                else:
+                    readings = await collect_readings(
+                        connector,
+                        mapping,
                         settings.building_id,
                         settings.gateway_id,
                         settings.connector,
                         settings.tenant_id,
                     )
-                    ok = await uploader.upload_batch(
-                        batch,
-                        queue_depth=q_metrics["queue_depth"],
-                        oldest_queued_event_seconds=q_metrics["oldest_queued_event_seconds"],
-                    )
-                    if not ok:
-                        for row in batch:
-                            uploader.events_queued_total += 1
-                            dedupe = f"{row['building_id']}:{row['source_point_id']}:{row['source_timestamp']}"
-                            queue.enqueue(row["event_id"], dedupe, row)
-                else:
-                    await uploader.send_heartbeat(
-                        connector_status="ONLINE",
-                        queue_depth=q_metrics["queue_depth"],
-                        oldest_queued_event_seconds=q_metrics["oldest_queued_event_seconds"],
-                    )
+                    if readings:
+                        batch = normalize_batch(
+                            readings,
+                            settings.building_id,
+                            settings.gateway_id,
+                            settings.connector,
+                            settings.tenant_id,
+                        )
+                        ok = await uploader.upload_batch(
+                            batch,
+                            queue_depth=q_metrics["queue_depth"],
+                            oldest_queued_event_seconds=q_metrics["oldest_queued_event_seconds"],
+                        )
+                        if not ok:
+                            for row in batch:
+                                uploader.events_queued_total += 1
+                                dedupe = f"{row['building_id']}:{row['source_point_id']}:{row['source_timestamp']}"
+                                queue.enqueue(row["event_id"], dedupe, row)
+                    else:
+                        await uploader.send_heartbeat(
+                            connector_status="ONLINE",
+                            queue_depth=q_metrics["queue_depth"],
+                            oldest_queued_event_seconds=q_metrics["oldest_queued_event_seconds"],
+                        )
 
             for row_id, payload, attempts in queue.dequeue_batch():
                 qm = queue.metrics()

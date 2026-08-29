@@ -63,7 +63,7 @@ def test_production_live_does_not_silently_fallback_to_sqlite(monkeypatch):
 
     backend, error = resolve_telemetry_backend(get_settings())
     assert backend == "unavailable"
-    assert "SUPABASE_SERVICE_KEY" in (error or "")
+    assert "TELEMETRY_INGEST_GATED_SUPABASE" in (error or "")
 
     with pytest.raises(TelemetryStoreUnavailableError):
         get_telemetry_store()

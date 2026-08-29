@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from app.deps.auth import UserContext, get_optional_user, get_required_user
 from app.deps.guards import assert_building_access, empty_no_building, require_write_access
@@ -315,4 +315,57 @@ async def building_telemetry_current(
         "points": [_serialize_telemetry_point(p) for p in points],
         "total": len(points),
         "influx": influx.infrastructure_state(),
+    }
+
+
+@router.get("/{building_id}/telemetry/history")
+async def building_telemetry_history(
+    building_id: str,
+    hours: int = Query(default=24, ge=1, le=168),
+    every: str = Query(default="15m"),
+    point_id: str | None = None,
+    limit: int = Query(default=500, ge=1, le=2000),
+    user: UserContext = Depends(get_optional_user),
+) -> dict:
+    assert_building_access(user, building_id)
+    influx = get_influx_service()
+    state = influx.infrastructure_state()
+    if state.get("status") == "simulated" and not user.allows_demo_data():
+        return {
+            "building_id": building_id,
+            "point_id": point_id,
+            "hours": hours,
+            "series": [],
+            "total": 0,
+            "influx": state,
+            "available": False,
+            "state": "INFLUX_UNAVAILABLE",
+        }
+    if point_id:
+        store = get_telemetry_store()
+        point = store.get_point(point_id)
+        if not point or point["building_id"] != building_id:
+            raise HTTPException(status_code=404, detail=bilingual_error("Point not found", "النقطة غير موجودة"))
+        series = influx.query_telemetry_point_history(
+            point_id=point_id,
+            building_id=building_id,
+            hours=hours,
+            every=every,
+        )
+    else:
+        series = influx.query_building_telemetry_history(
+            building_id,
+            hours=hours,
+            every=every,
+            limit=limit,
+        )
+    return {
+        "building_id": building_id,
+        "point_id": point_id,
+        "hours": hours,
+        "series": series,
+        "total": len(series),
+        "influx": state,
+        "available": state.get("persistence", False) and len(series) > 0,
+        "state": "OK" if series else "NO_DATA",
     }

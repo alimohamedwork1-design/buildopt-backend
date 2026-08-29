@@ -29,6 +29,7 @@ from app.api import (
     recommendations,
     refrigeration,
     savings,
+    semantic,
     sessions,
     site,
     telemetry,
@@ -163,6 +164,7 @@ app.include_router(telemetry.router, prefix=api_prefix)
 app.include_router(gateways.router, prefix=api_prefix)
 app.include_router(discovery.router, prefix=api_prefix)
 app.include_router(points.router, prefix=api_prefix)
+app.include_router(semantic.router, prefix=api_prefix)
 
 
 @app.get("/")

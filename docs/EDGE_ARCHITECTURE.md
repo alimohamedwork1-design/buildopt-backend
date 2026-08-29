@@ -46,16 +46,18 @@ When queue exceeds `max_rows` (default 50,000):
 
 Events exceeding max retry attempts are **retained** in queue (no silent deletion).
 
-## Credential security
+## Pilot bootstrap (Phase 4)
 
-- Edge reads `METASYS_*` from environment or Docker secrets
-- Passwords never returned in API responses
-- Shared `X-API-Key` for pilot; gateway identity bound server-side
+`config/mapped_points.json` (gitignored) is **bootstrap/fallback only**. Production path:
 
-## Legacy (deprecated)
+```text
+Metasys Discovery → Raw Point Registry → Semantic Approval → GET /gateways/{id}/collection-config → Edge Collection
+```
 
-`edge/agent.py` is **deprecated**. Requires `LEGACY_EDGE_ENABLED=true` to run. Use `buildopt-edge/` for production telemetry with provenance.
+Edge env: prefer `GATEWAY_API_KEY` (`bo_gw_*` scoped token) over shared `INGEST_API_KEY`.
 
-## Pilot bootstrap
+## Auth (Phase 4)
 
-`config/mapped_points.json` (gitignored) bootstraps collection. Edge syncs discovered points to Raw Point Registry via `/discovery/points/batch`.
+- Scoped gateway tokens: `bo_gw_{gateway_id}_*` — telemetry, heartbeat, discovery, collection-config
+- Master `INGEST_API_KEY`: token issuance/revocation only (`verify_master_ingest_key`)
+- Gateway identity bound server-side; cross-tenant/building spoofing rejected
