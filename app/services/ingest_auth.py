@@ -20,6 +20,19 @@ def verify_master_ingest_key(x_api_key: str | None) -> None:
         )
     if settings.ingest_api_key and x_api_key == settings.ingest_api_key:
         return
+
+    if x_api_key:
+        from app.services.gateway_token_store import get_gateway_token_store
+
+        if get_gateway_token_store().validate(x_api_key):
+            raise HTTPException(
+                status_code=401,
+                detail=bilingual_error(
+                    "Master ingest key required for this operation",
+                    "مفتاح الإدخال الرئيسي مطلوب لهذه العملية",
+                ),
+            )
+
     if settings.ingest_api_key:
         raise HTTPException(status_code=401, detail=bilingual_error("Invalid API key", "مفتاح API غير صالح"))
 

@@ -38,6 +38,23 @@ def require_write_access(user: UserContext = Depends(get_required_user)) -> User
     return user
 
 
+_SEMANTIC_WRITE_ROLES = frozenset({"admin", "bms_integrator", "energy_engineer", "facility_manager"})
+
+
+def require_semantic_write(user: UserContext = Depends(get_required_user)) -> UserContext:
+    """Engineer/admin/integrator — approve, reject, edit, revert semantic mappings."""
+    if user.is_read_only:
+        raise HTTPException(status_code=403, detail=bilingual_error("Read-only account", "حساب للقراءة فقط"))
+    if user.is_admin:
+        return user
+    if not _SEMANTIC_WRITE_ROLES.intersection(set(user.roles)):
+        raise HTTPException(
+            status_code=403,
+            detail=bilingual_error("Semantic write access required", "يتطلب صلاحيات تعديل التعيين الدلالي"),
+        )
+    return user
+
+
 def require_module_enabled(module_slug: str):
     async def _guard(user: UserContext = Depends(get_optional_user)) -> UserContext:
         if user.allows_demo_data():

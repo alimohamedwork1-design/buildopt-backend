@@ -133,19 +133,43 @@ def mapping_to_discovery_points(mapping: Dict[str, str], connector_id: str) -> L
 
 
 async def resolve_collection_mapping(settings: EdgeSettings, uploader: CloudUploader) -> Dict[str, str]:
-    """Bootstrap mapped_points.json first; else approved cloud collection config."""
+    """Bootstrap mapped_points.json first; else cloud-approved config with local cache fallback."""
     bootstrap = load_mapped_points(settings.mapped_points_file)
     if bootstrap:
         logger.info("Using bootstrap mapped_points.json (%d approved keys)", len(bootstrap))
         return bootstrap
     cloud_mapping = await uploader.fetch_collection_config()
     if cloud_mapping:
-        logger.info("Using approved cloud collection config (%d keys)", len(cloud_mapping))
+        logger.info(
+            "Using approved cloud collection config (%d keys, version=%s)",
+            len(cloud_mapping),
+            uploader._active_config_version or "unknown",
+        )
         return cloud_mapping
+    cached = uploader.load_cached_mapping()
+    if cached:
+        logger.warning(
+            "Cloud config unavailable — using last-known-good local cache (%d keys, version=%s)",
+            len(cached),
+            uploader._active_config_version or "unknown",
+        )
+        return cached
     logger.error(
         "NOT CONFIGURED — no bootstrap mapped_points.json and no approved cloud collection config"
     )
     return {}
+
+
+async def maybe_refresh_collection_mapping(
+    settings: EdgeSettings,
+    uploader: CloudUploader,
+    current: Dict[str, str],
+) -> Dict[str, str]:
+    """Periodic version-aware refresh — keeps last known config on failure."""
+    refreshed = await uploader.fetch_collection_config()
+    if refreshed:
+        return refreshed
+    return current
 
 
 async def run_edge() -> None:
@@ -178,8 +202,12 @@ async def run_edge() -> None:
         settings.cloud_api_url,
     )
 
+    poll_cycles = 0
     while not _shutdown:
         try:
+            poll_cycles += 1
+            if poll_cycles % 20 == 0 and not load_mapped_points(settings.mapped_points_file):
+                mapping = await maybe_refresh_collection_mapping(settings, uploader, mapping)
             q_metrics = queue.metrics()
             health = await connector.health()
             status = health.get("status", "OFFLINE")

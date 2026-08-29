@@ -12,6 +12,7 @@ from app.deps.auth import get_optional_user
 from app.models.user_context import UserContext
 from app.services.edge_heartbeat_store import edge_heartbeat_store
 from app.services.ingest_auth import authorize_gateway, verify_ingest_key, verify_master_ingest_key
+from app.services.collection_config_service import get_collection_config_service
 from app.services.semantic_mapping_service import build_collection_config
 from app.services.telemetry_store import get_telemetry_store
 from app.services.gateway_token_store import get_gateway_token_store
@@ -192,10 +193,12 @@ async def gateway_collection_config(
     gw = store.get_gateway(gateway_id)
     if not gw:
         raise HTTPException(status_code=404, detail=bilingual_error("Gateway not registered", "البوابة غير مسجلة"))
+    svc = get_collection_config_service()
+    active = svc.get_active(building_id=gw["building_id"], gateway_id=gateway_id)
+    if active:
+        active["state"] = "OK" if active.get("mapping") else "NO_APPROVED_MAPPINGS"
+        return active
     points, _ = store.list_points(building_id=gw["building_id"], gateway_id=gateway_id, limit=500)
     config = build_collection_config(points, building_id=gw["building_id"], gateway_id=gateway_id)
-    if not config.get("mapping"):
-        config["state"] = "NO_APPROVED_MAPPINGS"
-    else:
-        config["state"] = "OK"
+    config["state"] = "NO_APPROVED_MAPPINGS" if not config.get("mapping") else "DRAFT"
     return config

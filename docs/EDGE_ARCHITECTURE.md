@@ -56,7 +56,21 @@ Metasys Discovery → Raw Point Registry → Semantic Approval → GET /gateways
 
 Edge env: prefer `GATEWAY_API_KEY` (`bo_gw_*` scoped token) over shared `INGEST_API_KEY`.
 
-## Auth (Phase 4)
+## Config refresh (Phase 5)
+
+Edge periodically calls `GET /api/v1/gateways/{gateway_id}/collection-config` with gateway token.
+
+```text
+Fetch config → validate mapping JSON → compare config_version → atomic local cache write → collect
+```
+
+On refresh failure: **continue last-known-good config** from `active_collection_config.json` (same directory as edge queue DB) — never wipe active mapping.
+
+Local cache: structured JSON only (`source: cloud_approved`, `config_version`, `mapping`); atomic temp-file replace; corrupted cache rejected.
+
+Observed in uploader metrics: `config_refresh_failures_total` (no credentials logged).
+
+## Auth (Phase 4–5)
 
 - Scoped gateway tokens: `bo_gw_{gateway_id}_*` — telemetry, heartbeat, discovery, collection-config
 - Master `INGEST_API_KEY`: token issuance/revocation only (`verify_master_ingest_key`)

@@ -508,6 +508,155 @@ class SupabaseTelemetryStore:
         ).json()
         return [self._normalize_token_row(r) for r in rows]
 
+    def insert_semantic_audit(self, **kwargs: Any) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        row = {
+            "audit_id": kwargs["audit_id"],
+            "point_id": kwargs.get("point_id"),
+            "building_id": kwargs["building_id"],
+            "tenant_id": kwargs.get("tenant_id"),
+            "gateway_id": kwargs.get("gateway_id"),
+            "source_point_id": kwargs.get("source_point_id"),
+            "action": kwargs["action"],
+            "previous_state": kwargs.get("previous_state") or {},
+            "new_state": kwargs.get("new_state") or {},
+            "actor_user_id": kwargs.get("actor_user_id"),
+            "actor_email": kwargs.get("actor_email"),
+            "comment": kwargs.get("comment"),
+            "confidence": kwargs.get("confidence"),
+            "created_at": now,
+        }
+        self._request("POST", "semantic_audit_log", json_body=row, prefer="return=minimal")
+        return {"audit_id": kwargs["audit_id"], "action": kwargs["action"], "created_at": now}
+
+    def list_semantic_audit(
+        self, *, building_id: Optional[str] = None, point_id: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        params: Dict[str, str] = {"order": "created_at.desc", "limit": str(limit)}
+        if point_id:
+            params["point_id"] = f"eq.{point_id}"
+        elif building_id:
+            params["building_id"] = f"eq.{building_id}"
+        else:
+            return []
+        return self._request("GET", "semantic_audit_log", params=params).json()
+
+    def next_mapping_revision(self, building_id: str, gateway_id: Optional[str]) -> int:
+        params: Dict[str, str] = {
+            "building_id": f"eq.{building_id}",
+            "select": "mapping_revision",
+            "order": "mapping_revision.desc",
+            "limit": "1",
+        }
+        if gateway_id:
+            params["gateway_id"] = f"eq.{gateway_id}"
+        rows = self._request("GET", "collection_config_versions", params=params).json()
+        if not rows:
+            return 1
+        return int(rows[0].get("mapping_revision", 0)) + 1
+
+    def supersede_active_config_versions(self, building_id: str, gateway_id: Optional[str]) -> None:
+        params: Dict[str, str] = {"building_id": f"eq.{building_id}", "status": "eq.ACTIVE"}
+        if gateway_id:
+            params["gateway_id"] = f"eq.{gateway_id}"
+        self._request(
+            "PATCH",
+            "collection_config_versions",
+            params=params,
+            json_body={"status": "SUPERSEDED"},
+            prefer="return=minimal",
+        )
+
+    def publish_active_config_version(self, **kwargs: Any) -> Dict[str, Any]:
+        """Best-effort atomic publish: DRAFT insert → supersede → activate with restore on failure."""
+        building_id = kwargs["building_id"]
+        gateway_id = kwargs.get("gateway_id")
+        config_version = kwargs["config_version"]
+        prev = self.get_active_config_version(building_id, gateway_id)
+        prev_version = prev.get("config_version") if prev else None
+
+        draft_row = dict(kwargs)
+        draft_row["status"] = "DRAFT"
+        draft_row["activated_at"] = None
+        self.insert_config_version(**draft_row)
+
+        try:
+            self.supersede_active_config_versions(building_id, gateway_id)
+            now = _iso(_utcnow())
+            self._request(
+                "PATCH",
+                "collection_config_versions",
+                params={"config_version": f"eq.{config_version}"},
+                json_body={"status": "ACTIVE", "activated_at": now},
+                prefer="return=minimal",
+            )
+        except Exception:
+            if prev_version:
+                try:
+                    self._request(
+                        "PATCH",
+                        "collection_config_versions",
+                        params={"config_version": f"eq.{prev_version}"},
+                        json_body={"status": "ACTIVE"},
+                        prefer="return=minimal",
+                    )
+                except Exception:
+                    pass
+            raise
+
+        return {"config_version": config_version, "created_at": _iso(_utcnow()), "status": "ACTIVE"}
+
+    def insert_config_version(self, **kwargs: Any) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        row = {
+            "config_version": kwargs["config_version"],
+            "building_id": kwargs["building_id"],
+            "gateway_id": kwargs.get("gateway_id"),
+            "tenant_id": kwargs.get("tenant_id"),
+            "mapping_revision": kwargs["mapping_revision"],
+            "point_count": kwargs["point_count"],
+            "approved_count": kwargs["approved_count"],
+            "status": kwargs["status"],
+            "config_payload": kwargs.get("config_payload") or {},
+            "created_at": now,
+            "activated_at": _iso(kwargs.get("activated_at")),
+        }
+        self._request("POST", "collection_config_versions", json_body=row, prefer="return=minimal")
+        return {"config_version": kwargs["config_version"], "created_at": now, "status": kwargs["status"]}
+
+    def get_active_config_version(
+        self, building_id: str, gateway_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        params: Dict[str, str] = {
+            "building_id": f"eq.{building_id}",
+            "status": "eq.ACTIVE",
+            "order": "created_at.desc",
+            "limit": "1",
+        }
+        if gateway_id:
+            params["gateway_id"] = f"eq.{gateway_id}"
+        rows = self._request("GET", "collection_config_versions", params=params).json()
+        if not rows:
+            return None
+        row = dict(rows[0])
+        payload = row.get("config_payload")
+        if isinstance(payload, str):
+            row["config_payload"] = json.loads(payload or "{}")
+        return row
+
+    def list_config_versions(self, building_id: str, *, limit: int = 20) -> List[Dict[str, Any]]:
+        rows = self._request(
+            "GET",
+            "collection_config_versions",
+            params={
+                "building_id": f"eq.{building_id}",
+                "select": "config_version,building_id,gateway_id,mapping_revision,point_count,approved_count,status,created_at,activated_at",
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
+        ).json()
+        return rows
+
     # ---- Idempotency ----
 
     def is_event_processed(self, event_id: str) -> bool:

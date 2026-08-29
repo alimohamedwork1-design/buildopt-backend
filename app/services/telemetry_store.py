@@ -120,6 +120,39 @@ class TelemetryStore:
                 expires_at text
             );
             create index if not exists gateway_tokens_gateway_idx on gateway_tokens(gateway_id);
+
+            create table if not exists semantic_audit_log (
+                audit_id text primary key,
+                point_id text,
+                building_id text not null,
+                tenant_id text,
+                gateway_id text,
+                source_point_id text,
+                action text not null,
+                previous_state text not null default '{}',
+                new_state text not null default '{}',
+                actor_user_id text,
+                actor_email text,
+                comment text,
+                confidence real,
+                created_at text not null
+            );
+            create index if not exists semantic_audit_building_idx on semantic_audit_log(building_id);
+
+            create table if not exists collection_config_versions (
+                config_version text primary key,
+                building_id text not null,
+                gateway_id text,
+                tenant_id text,
+                mapping_revision integer not null default 1,
+                point_count integer not null default 0,
+                approved_count integer not null default 0,
+                status text not null default 'DRAFT',
+                config_payload text not null default '{}',
+                created_at text not null,
+                activated_at text
+            );
+            create index if not exists collection_config_building_idx on collection_config_versions(building_id);
             """
         )
         self._conn.commit()
@@ -420,6 +453,199 @@ class TelemetryStore:
         )
         self._conn.commit()
         return self.get_point(point_id) or {}
+
+    # ---- Semantic audit ----
+
+    def insert_semantic_audit(
+        self,
+        *,
+        audit_id: str,
+        point_id: Optional[str],
+        building_id: str,
+        tenant_id: Optional[str],
+        gateway_id: Optional[str],
+        source_point_id: Optional[str],
+        action: str,
+        previous_state: Dict[str, Any],
+        new_state: Dict[str, Any],
+        actor_user_id: Optional[str],
+        actor_email: Optional[str],
+        comment: Optional[str],
+        confidence: Optional[float],
+    ) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        self._conn.execute(
+            """
+            insert into semantic_audit_log (
+                audit_id, point_id, building_id, tenant_id, gateway_id, source_point_id,
+                action, previous_state, new_state, actor_user_id, actor_email, comment, confidence, created_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                audit_id, point_id, building_id, tenant_id, gateway_id, source_point_id,
+                action, json.dumps(previous_state or {}), json.dumps(new_state or {}),
+                actor_user_id, actor_email, comment, confidence, now,
+            ),
+        )
+        self._conn.commit()
+        return {"audit_id": audit_id, "action": action, "created_at": now}
+
+    def list_semantic_audit(
+        self,
+        *,
+        building_id: Optional[str] = None,
+        point_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        if point_id:
+            rows = self._conn.execute(
+                "select * from semantic_audit_log where point_id=? order by created_at desc limit ?",
+                (point_id, limit),
+            ).fetchall()
+        elif building_id:
+            rows = self._conn.execute(
+                "select * from semantic_audit_log where building_id=? order by created_at desc limit ?",
+                (building_id, limit),
+            ).fetchall()
+        else:
+            return []
+        out = []
+        for row in rows:
+            d = dict(row)
+            d["previous_state"] = json.loads(d.get("previous_state") or "{}")
+            d["new_state"] = json.loads(d.get("new_state") or "{}")
+            out.append(d)
+        return out
+
+    # ---- Collection config versions ----
+
+    def next_mapping_revision(self, building_id: str, gateway_id: Optional[str]) -> int:
+        clause = "building_id=?"
+        params: List[Any] = [building_id]
+        if gateway_id:
+            clause += " and gateway_id=?"
+            params.append(gateway_id)
+        row = self._conn.execute(
+            f"select max(mapping_revision) as rev from collection_config_versions where {clause}",
+            params,
+        ).fetchone()
+        return int((row["rev"] or 0) + 1) if row else 1
+
+    def supersede_active_config_versions(self, building_id: str, gateway_id: Optional[str]) -> None:
+        clause = "building_id=? and status='ACTIVE'"
+        params: List[Any] = [building_id]
+        if gateway_id:
+            clause += " and gateway_id=?"
+            params.append(gateway_id)
+        self._conn.execute(
+            f"update collection_config_versions set status='SUPERSEDED' where {clause}",
+            params,
+        )
+
+    def publish_active_config_version(
+        self,
+        *,
+        config_version: str,
+        building_id: str,
+        gateway_id: Optional[str],
+        tenant_id: Optional[str],
+        mapping_revision: int,
+        point_count: int,
+        approved_count: int,
+        config_payload: Dict[str, Any],
+        activated_at: Optional[datetime],
+    ) -> Dict[str, Any]:
+        """Atomically supersede prior ACTIVE and insert new ACTIVE — single transaction."""
+        now = _iso(_utcnow())
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            clause = "building_id=? and status='ACTIVE'"
+            params: List[Any] = [building_id]
+            if gateway_id:
+                clause += " and gateway_id=?"
+                params.append(gateway_id)
+            self._conn.execute(
+                f"update collection_config_versions set status='SUPERSEDED' where {clause}",
+                params,
+            )
+            self._conn.execute(
+                """
+                insert into collection_config_versions (
+                    config_version, building_id, gateway_id, tenant_id, mapping_revision,
+                    point_count, approved_count, status, config_payload, created_at, activated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
+                """,
+                (
+                    config_version, building_id, gateway_id, tenant_id, mapping_revision,
+                    point_count, approved_count, json.dumps(config_payload or {}),
+                    now, _iso(activated_at),
+                ),
+            )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        return {"config_version": config_version, "created_at": now, "status": "ACTIVE"}
+
+    def insert_config_version(
+        self,
+        *,
+        config_version: str,
+        building_id: str,
+        gateway_id: Optional[str],
+        tenant_id: Optional[str],
+        mapping_revision: int,
+        point_count: int,
+        approved_count: int,
+        status: str,
+        config_payload: Dict[str, Any],
+        activated_at: Optional[datetime],
+    ) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        self._conn.execute(
+            """
+            insert into collection_config_versions (
+                config_version, building_id, gateway_id, tenant_id, mapping_revision,
+                point_count, approved_count, status, config_payload, created_at, activated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                config_version, building_id, gateway_id, tenant_id, mapping_revision,
+                point_count, approved_count, status, json.dumps(config_payload or {}),
+                now, _iso(activated_at),
+            ),
+        )
+        self._conn.commit()
+        return {"config_version": config_version, "created_at": now, "status": status}
+
+    def get_active_config_version(
+        self, building_id: str, gateway_id: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        clause = "building_id=? and status='ACTIVE'"
+        params: List[Any] = [building_id]
+        if gateway_id:
+            clause += " and gateway_id=?"
+            params.append(gateway_id)
+        row = self._conn.execute(
+            f"select * from collection_config_versions where {clause} order by created_at desc limit 1",
+            params,
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["config_payload"] = json.loads(d.get("config_payload") or "{}")
+        return d
+
+    def list_config_versions(self, building_id: str, *, limit: int = 20) -> List[Dict[str, Any]]:
+        rows = self._conn.execute(
+            """
+            select config_version, building_id, gateway_id, mapping_revision, point_count,
+                   approved_count, status, created_at, activated_at
+            from collection_config_versions where building_id=? order by created_at desc limit ?
+            """,
+            (building_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # ---- Gateway tokens ----
 

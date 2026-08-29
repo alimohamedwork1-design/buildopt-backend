@@ -26,19 +26,25 @@ Refrigeration vertical uses separate semantics (compressor, evaporator, NH3 safe
 
 ---
 
-## Mapping pipeline (Phase 4 — Registry V2)
+## Mapping pipeline (Phase 5 — Operations)
 
-DISCOVER → REGISTRY → SUGGEST → REVIEW → APPROVE → COLLECTION CONFIG → EDGE
+DISCOVER → REGISTRY → SUGGEST → REVIEW → APPROVE → PUBLISH CONFIG → EDGE → HISTORY
 
 | Step | Endpoint |
 |------|----------|
 | Registry | `POST /discovery/points/batch` |
-| Suggestions | `GET /semantic/buildings/{id}/suggestions` |
-| Approval | `POST /semantic/buildings/{id}/approve` |
+| Review queue | `GET /semantic/buildings/{id}/review-queue` |
+| Approve / reject / edit / revert | `POST /semantic/buildings/{id}/approve|reject|edit|revert` |
+| Audit | `GET /semantic/buildings/{id}/audit` |
+| Publish config | `POST /semantic/buildings/{id}/collection-config/publish` |
 | Edge export | `GET /gateways/{gateway_id}/collection-config` |
+| Point history | `GET /buildings/{id}/telemetry/history?point_id=` |
 
-Code: `semantic_mapping_service.py`, `semantic_mapper.py`, `metasys_auto_mapper.py`  
-Thresholds: ≥0.95 auto-candidate, 0.75–0.95 review, <0.75 unmapped — **never auto-approved without explicit POST**
+Semantic metadata lives in `raw_points.metadata` (never mutates raw source identity).
+
+Relationships supported in metadata: `has_point`, `serves`, `located_in`, `controlled_by`, `feeds`, `meters`.
+
+See `docs/SEMANTIC_OPERATIONS.md` for workflow and RBAC.
 
 ---
 

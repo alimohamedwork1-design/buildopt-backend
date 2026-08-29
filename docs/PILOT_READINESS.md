@@ -54,3 +54,23 @@ Semantic Mapping V2 (approved collection config from registry), Influx history q
 **Edge collection config:** `GET /api/v1/semantic/buildings/{id}/collection-config` replaces manual `mapped_points.json` once mappings are approved in registry.
 
 **Gateway tokens:** Issue via `POST /gateways/{gateway_id}/tokens` with master `INGEST_API_KEY`; edge uses scoped `bo_gw_*` token instead of shared key.
+
+## Phase 5 — implemented (2026-08-29)
+
+| # | Feature | Status | Notes |
+|---|---------|--------|-------|
+| 1 | Semantic review queue UI | **PASS** | Tag Mapper wired to live APIs |
+| 2 | Explicit approve/reject/edit/revert | **PASS** | Audit trail on every action |
+| 3 | Collection config versioning | **PASS** | Migration 009; DRAFT/ACTIVE/SUPERSEDED |
+| 4 | Edge version-aware config refresh | **PASS** | Fail-safe — keeps last active config |
+| 5 | Point history drilldown | **PASS** | PointDetailsPanel; Influx ≤7d |
+| 6 | Equipment FDD input readiness | **PASS** | Coverage from approved mappings only |
+| 7 | Zero-mock-live semantic UI | **PASS** | Honest empty/unavailable states |
+
+**Migration 009** (`semantic_audit_log`, `collection_config_versions`) applied to Lovable Cloud DB.
+
+**Pilot workflow:** Discovery → Review Queue → Approve → Publish Config → Edge Refresh → Point History.
+
+## Recommended Phase 6
+
+On-site Metasys pilot with engineer mapping session, 7-day history validation, FDD template tuning (read-only).

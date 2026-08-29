@@ -8,6 +8,11 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.config import EdgeSettings
+from app.storage.collection_config_cache import (
+    load_cached_config,
+    save_cached_config,
+    validate_cloud_config,
+)
 
 
 class CloudUploader:
@@ -19,6 +24,26 @@ class CloudUploader:
         self.upload_failures_total = 0
         self.last_successful_upload_at: Optional[str] = None
         self._upload_timestamps: List[float] = []
+        self._active_config_version: Optional[str] = None
+        self._config_refresh_failures = 0
+        cached_mapping, cached_version = load_cached_config(settings.queue_db_path)
+        if cached_mapping:
+            self._active_config_version = cached_version
+
+    def load_cached_mapping(self) -> Dict[str, str]:
+        mapping, version = load_cached_config(self.settings.queue_db_path)
+        if version:
+            self._active_config_version = version
+        return mapping
+
+    def _persist_config(self, mapping: Dict[str, str], config_version: Optional[str]) -> None:
+        save_cached_config(
+            self.settings.queue_db_path,
+            mapping=mapping,
+            config_version=config_version,
+        )
+        if config_version:
+            self._active_config_version = config_version
 
     def _headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -27,17 +52,27 @@ class CloudUploader:
         return headers
 
     async def fetch_collection_config(self) -> Dict[str, str]:
-        """Load approved mapping from cloud registry (requires gateway or master key)."""
+        """Load approved mapping + version from cloud; validate and persist on success."""
         if not self.settings.api_key:
             return {}
         url = f"{self.settings.cloud_api_url}/api/v1/gateways/{self.settings.gateway_id}/collection-config"
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.get(url, headers=self._headers())
+            if r.status_code in (401, 403):
+                self._config_refresh_failures += 1
+                return {}
             if r.status_code != 200:
+                self._config_refresh_failures += 1
                 return {}
             body = r.json()
-            mapping = body.get("mapping") or {}
-            return mapping if isinstance(mapping, dict) else {}
+            mapping, version = validate_cloud_config(body)
+            if not mapping:
+                self._config_refresh_failures += 1
+                return {}
+            if version and version == self._active_config_version:
+                return mapping
+            self._persist_config(mapping, version)
+            return mapping
 
     def _telemetry_rate_per_minute(self) -> float:
         now = datetime.now(timezone.utc).timestamp()
