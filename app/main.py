@@ -1,3 +1,4 @@
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -45,7 +46,7 @@ async def lifespan(app: FastAPI):
     install_log_handler()
     await connection_store.load_metasys_from_supabase()
     if connection_store.has_saved_metasys() and not settings.demo_mode:
-        await run_bms_auto_connect(merge=True)
+        asyncio.create_task(run_bms_auto_connect(merge=True))
 
     if settings.app_env.lower() in ("production", "prod") and not settings.ingest_api_key:
         log_event(
@@ -71,8 +72,15 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     log_event("info", "BuildOpt pipeline started", "تم تشغيل خط أنابيب BuildOpt")
-    await run_poll_cycle()
-    await run_fdd_cycle()
+
+    async def _bootstrap_pipeline() -> None:
+        try:
+            await run_poll_cycle()
+            await run_fdd_cycle()
+        except Exception as exc:
+            log_event("error", f"Bootstrap pipeline failed: {exc}", "فشل تشغيل خط الأنابيب الأولي")
+
+    asyncio.create_task(_bootstrap_pipeline())
     yield
     if scheduler.running:
         scheduler.shutdown(wait=False)
