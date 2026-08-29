@@ -31,13 +31,19 @@ async def module_data(
 ) -> Dict[str, Any]:
     from app.utils.arabic_utils import bilingual_error
 
-    mod_slug = slug.replace("-", "_") if slug not in ("overview", "home", "index") else "overview"
+    mod_slug = slug.replace("-", "_")
+    enabled = user.enabled_modules
+    module_allowed = (
+        mod_slug in enabled
+        or slug in enabled
+        or slug.replace("_", "-") in enabled
+    )
     if user.is_live_account:
         if not user.authenticated:
             raise HTTPException(status_code=401, detail=bilingual_error("Authentication required", "المصادقة مطلوبة"))
         if not user.has_buildings:
             raise HTTPException(status_code=404, detail=empty_no_building())
-        if mod_slug not in user.enabled_modules and not user.is_admin:
+        if not module_allowed and not user.is_admin:
             raise HTTPException(status_code=403, detail=bilingual_error(f"Module '{slug}' disabled", "الوحدة معطلة"))
     assert_building_access(user, building_id)
     normalized = "" if slug in ("overview", "home", "index") else slug
