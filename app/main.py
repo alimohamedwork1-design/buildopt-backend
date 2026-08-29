@@ -17,6 +17,7 @@ from app.api import (
     discovery,
     energy,
     equipment,
+    fdd,
     gateways,
     gcc,
     health,
@@ -28,6 +29,7 @@ from app.api import (
     protocols,
     recommendations,
     refrigeration,
+    reports,
     savings,
     semantic,
     sessions,
@@ -165,6 +167,8 @@ app.include_router(gateways.router, prefix=api_prefix)
 app.include_router(discovery.router, prefix=api_prefix)
 app.include_router(points.router, prefix=api_prefix)
 app.include_router(semantic.router, prefix=api_prefix)
+app.include_router(fdd.router, prefix=api_prefix)
+app.include_router(reports.router, prefix=api_prefix)
 
 
 @app.get("/")

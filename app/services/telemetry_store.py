@@ -153,6 +153,43 @@ class TelemetryStore:
                 activated_at text
             );
             create index if not exists collection_config_building_idx on collection_config_versions(building_id);
+
+            create table if not exists fdd_faults (
+                fault_id text primary key,
+                rule_id text not null,
+                tenant_id text,
+                building_id text not null,
+                equipment_id text not null,
+                equipment_type text not null default 'AHU',
+                severity text not null default 'warning',
+                status text not null default 'DETECTED',
+                confidence real not null default 0.5,
+                data_quality_score real,
+                input_coverage real,
+                evidence text not null default '{}',
+                source_points text not null default '[]',
+                observed_values text not null default '{}',
+                reason text,
+                recommended_next_check text,
+                first_seen text not null,
+                last_seen text not null,
+                detected_at text not null,
+                resolved_at text,
+                created_at text not null,
+                updated_at text not null
+            );
+            create index if not exists fdd_faults_building_idx on fdd_faults(building_id, status);
+
+            create table if not exists fdd_fault_audit (
+                audit_id text primary key,
+                fault_id text not null,
+                action text not null,
+                previous_status text,
+                new_status text,
+                actor_user_id text,
+                comment text,
+                created_at text not null
+            );
             """
         )
         self._conn.commit()
@@ -646,6 +683,93 @@ class TelemetryStore:
             (building_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---- FDD faults ----
+
+    def upsert_fdd_fault(self, fault: Dict[str, Any]) -> Dict[str, Any]:
+        now = _iso(_utcnow())
+        self._conn.execute(
+            """
+            insert into fdd_faults (
+                fault_id, rule_id, tenant_id, building_id, equipment_id, equipment_type,
+                severity, status, confidence, data_quality_score, input_coverage,
+                evidence, source_points, observed_values, reason, recommended_next_check,
+                first_seen, last_seen, detected_at, resolved_at, created_at, updated_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(fault_id) do update set
+                status=excluded.status, confidence=excluded.confidence,
+                data_quality_score=excluded.data_quality_score, input_coverage=excluded.input_coverage,
+                evidence=excluded.evidence, source_points=excluded.source_points,
+                observed_values=excluded.observed_values, last_seen=excluded.last_seen,
+                resolved_at=excluded.resolved_at, updated_at=excluded.updated_at
+            """,
+            (
+                fault["fault_id"], fault["rule_id"], fault.get("tenant_id"), fault["building_id"],
+                fault["equipment_id"], fault.get("equipment_type", "AHU"),
+                fault.get("severity", "warning"), fault.get("status", "DETECTED"),
+                fault.get("confidence", 0.5), fault.get("data_quality_score"), fault.get("input_coverage"),
+                json.dumps(fault.get("evidence") or {}),
+                json.dumps(fault.get("source_points") or []),
+                json.dumps(fault.get("observed_values") or {}),
+                fault.get("reason"), fault.get("recommended_next_check"),
+                fault.get("first_seen", now), fault.get("last_seen", now),
+                fault.get("detected_at", now), fault.get("resolved_at"),
+                fault.get("created_at", now), now,
+            ),
+        )
+        self._conn.commit()
+        return self.get_fdd_fault(fault["fault_id"]) or fault
+
+    def get_fdd_fault(self, fault_id: str) -> Optional[Dict[str, Any]]:
+        row = self._conn.execute("select * from fdd_faults where fault_id=?", (fault_id,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        for key in ("evidence", "source_points", "observed_values"):
+            if isinstance(d.get(key), str):
+                d[key] = json.loads(d[key] or "{}") if key != "source_points" else json.loads(d[key] or "[]")
+        return d
+
+    def list_fdd_faults(
+        self, building_id: str, *, active_only: bool = True, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        clause = "building_id=?"
+        params: List[Any] = [building_id]
+        if active_only:
+            clause += " and status not in ('RESOLVED', 'CLOSED')"
+        rows = self._conn.execute(
+            f"select * from fdd_faults where {clause} order by last_seen desc limit ?",
+            (*params, limit),
+        ).fetchall()
+        out = []
+        for row in rows:
+            d = dict(row)
+            for key in ("evidence", "source_points", "observed_values"):
+                if isinstance(d.get(key), str):
+                    d[key] = json.loads(d[key] or ("{}" if key != "source_points" else "[]"))
+            out.append(d)
+        return out
+
+    def insert_fdd_fault_audit(
+        self,
+        *,
+        audit_id: str,
+        fault_id: str,
+        action: str,
+        previous_status: Optional[str] = None,
+        new_status: Optional[str] = None,
+        actor_user_id: Optional[str] = None,
+        comment: Optional[str] = None,
+    ) -> None:
+        self._conn.execute(
+            """
+            insert into fdd_fault_audit (
+                audit_id, fault_id, action, previous_status, new_status, actor_user_id, comment, created_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (audit_id, fault_id, action, previous_status, new_status, actor_user_id, comment, _iso(_utcnow())),
+        )
+        self._conn.commit()
 
     # ---- Gateway tokens ----
 

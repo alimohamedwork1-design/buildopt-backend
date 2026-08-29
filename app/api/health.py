@@ -223,6 +223,12 @@ async def health_check() -> HealthResponse:
     )
 
 
+@router.get("/metrics")
+async def observability_metrics() -> dict:
+    from app.services.observability_service import snapshot
+    return snapshot()
+
+
 @router.get("/connections")
 async def connection_health() -> dict:
     settings = get_settings()

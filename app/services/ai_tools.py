@@ -48,7 +48,10 @@ def tool_savings_opportunities(building_id: str) -> List[Dict[str, Any]]:
     return [o.model_dump(mode="json") for o in list_opportunities(building_id)]
 
 
-def tool_fdd_results(_building_id: str = "") -> List[Dict[str, Any]]:
+def tool_fdd_results(building_id: str = "") -> List[Dict[str, Any]]:
+    from app.services.fdd_fault_store import get_fdd_fault_store
+    if building_id:
+        return get_fdd_fault_store().list_active(building_id)
     return [f.model_dump(mode="json") for f in live_data_service.list_fdd_results()]
 
 

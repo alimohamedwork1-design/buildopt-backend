@@ -480,9 +480,29 @@ def acknowledge_alert(alert_id: str, acknowledged_by: Optional[str] = None) -> b
     return supabase.acknowledge_alert(alert_id, acknowledged_by)
 
 
-def list_fdd_results(user: Optional[UserContext] = None) -> List[FDDResult]:
+def list_fdd_results(user: Optional[UserContext] = None, *, building_id: Optional[str] = None) -> List[FDDResult]:
     if allows_simulated_telemetry(user):
         return demo_mode.list_fdd_results()
+
+    if building_id:
+        from app.services.fdd_fault_store import get_fdd_fault_store
+        faults = get_fdd_fault_store().list_active(building_id)
+        if faults:
+            results: List[FDDResult] = []
+            for f in faults:
+                results.append(FDDResult(
+                    rule_id=f.get("rule_id", "FDD-000"),
+                    category=f.get("equipment_type", "HVAC"),
+                    equipment_id=f.get("equipment_id", building_id),
+                    severity=f.get("severity", "warning"),
+                    description=f.get("reason") or f.get("rule_id", "Fault"),
+                    description_ar="تم اكتشاف عطل",
+                    confidence=float(f.get("confidence", 0.85)),
+                    detected_at=datetime.fromisoformat(f["detected_at"].replace("Z", "+00:00"))
+                    if isinstance(f.get("detected_at"), str)
+                    else datetime.now(timezone.utc),
+                ))
+            return results
 
     cached = live_cache.get_fdd_results()
     return cached or []

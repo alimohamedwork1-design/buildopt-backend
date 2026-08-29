@@ -39,10 +39,10 @@ def _supabase() -> SupabaseService:
 def _fault_to_fdd(fault: dict, building_id: str) -> FDDResult:
     return FDDResult(
         rule_id=fault.get("rule_id", "FDD-000"),
-        category=fault.get("category", "HVAC"),
+        category=fault.get("equipment_type", fault.get("category", "HVAC")),
         equipment_id=fault.get("equipment_id", building_id),
         severity=fault.get("severity", "warning"),
-        description=fault.get("description", "Fault detected"),
+        description=fault.get("reason") or fault.get("description", "Fault detected"),
         description_ar=fault.get("description_ar", "تم اكتشاف عطل"),
         confidence=float(fault.get("confidence", 0.85)),
         detected_at=datetime.fromisoformat(fault["detected_at"].replace("Z", "+00:00"))
@@ -102,23 +102,13 @@ async def run_poll_cycle() -> None:
         influx.write_point("co2_ppm", float(live.environment.co2_ppm), tags)
         influx.write_point("cop", live.hvac.cop, tags)
 
-        readings = {
-            "cop": live.hvac.cop,
-            "supply_air_temp_deviation": abs(live.hvac.return_air_temp - live.hvac.supply_air_temp - 10),
-            "baseline_deviation_pct": 0,
-            "filter_pressure_pa": 100,
-        }
-        from app.services.refrigeration_poll import get_cached_snapshot
+        readings = {}
+        if not settings.demo_mode:
+            from app.services.semantic_readings_service import build_semantic_readings
+            from app.services.telemetry_store import get_telemetry_store
 
-        refrig = get_cached_snapshot(building_id)
-        if refrig and refrig.get("readings"):
-            r = refrig["readings"]
-            readings["superheat_k"] = r.get("superheat_k", 8.0)
-            readings["superheat"] = readings["superheat_k"]
-            readings["nh3_ppm"] = r.get("nh3_ppm", 0)
-            readings["evap_temp_drift"] = abs(r.get("evap_temp_c", -18) - (-18))
-            readings["box_temp_drift_c"] = readings["evap_temp_drift"]
-        faults = fault_detector.evaluate(readings)
+            readings, _, _ = build_semantic_readings(get_telemetry_store(), building_id=building_id)
+        faults = fault_detector.evaluate(readings) if readings else []
         for fault in faults:
             alert = Alert(
                 id=f"alert-{uuid.uuid4().hex[:8]}",
@@ -164,59 +154,68 @@ async def run_fdd_cycle() -> None:
         log_event("info", "FDD engine evaluated active rules (demo)", "قام محرك FDD بتقييم القواعد النشطة")
         return
 
-    fault_detector = FaultDetector(demo_mode=False)
+    from app.services.fdd_fault_store import get_fdd_fault_store
+    from app.services.fdd_rule_framework import FddRuleEngine
+    from app.services.semantic_readings_service import build_semantic_readings
+    from app.services.telemetry_store import get_telemetry_store
+
+    engine = FddRuleEngine()
+    fault_store = get_fdd_fault_store()
+    ts = get_telemetry_store()
     supabase = _supabase()
     results: List[FDDResult] = []
     new_alerts: List[Alert] = list(live_cache.get_alerts())
 
     for cfg in BUILDING_REGISTRY:
         building_id = cfg["id"]
-        live = live_cache.get_live(building_id) or await get_live_data(building_id)
-        if not live:
+        readings, meta, approved = build_semantic_readings(ts, building_id=building_id)
+        if not readings:
             continue
 
-        readings = {
-            "cop": live.hvac.cop,
-            "supply_air_temp_deviation": abs(live.hvac.return_air_temp - live.hvac.supply_air_temp - 10),
-            "baseline_deviation_pct": max(0, (live.energy.total_kw - 800) / 800 * 100),
-            "filter_pressure_pa": 180 if live.hvac.cop < 3.5 else 90,
-            "power_factor": 0.88,
-        }
-        from app.services.refrigeration_poll import get_cached_snapshot
+        equipment_ids = {m.get("equipment_id") or "UNASSIGNED" for m in meta.values()}
+        for eq in equipment_ids:
+            eq_readings = {k: v for k, v in readings.items() if meta.get(k, {}).get("equipment_id", "UNASSIGNED") == eq}
+            eq_meta = {k: v for k, v in meta.items() if v.get("equipment_id", "UNASSIGNED") == eq}
+            eval_result = engine.evaluate_equipment(
+                readings=eq_readings,
+                point_meta=eq_meta,
+                equipment_id=eq,
+                equipment_type="AHU",
+                building_id=building_id,
+            )
+            for fault in eval_result["faults"]:
+                fault_store.upsert_fault(fault)
+                from app.services.recommendation_engine import generate_recommendations_from_faults
+                from app.services.observability_service import increment
 
-        refrig = get_cached_snapshot(building_id)
-        if refrig and refrig.get("readings"):
-            r = refrig["readings"]
-            readings["superheat_k"] = r.get("superheat_k", 8.0)
-            readings["superheat"] = readings["superheat_k"]
-            readings["nh3_ppm"] = r.get("nh3_ppm", 0)
-            readings["evap_temp_drift"] = abs(r.get("evap_temp_c", -18) - (-18))
-            readings["box_temp_drift_c"] = readings["evap_temp_drift"]
-        for fault in fault_detector.evaluate(readings):
-            fdd = _fault_to_fdd(fault, building_id)
-            if not any(r.rule_id == fdd.rule_id and r.equipment_id == fdd.equipment_id for r in results):
-                results.append(fdd)
-                alert = Alert(
-                    id=f"alert-{uuid.uuid4().hex[:8]}",
-                    building_id=building_id,
-                    equipment_id=fdd.equipment_id,
-                    severity=fdd.severity,
-                    category=fdd.category,
-                    title=fdd.description[:80],
-                    message=fdd.description,
-                    message_ar=fdd.description_ar,
-                    timestamp=fdd.detected_at,
-                    acknowledged=False,
-                )
-                if not any(a.title == alert.title and a.building_id == building_id for a in new_alerts):
-                    new_alerts.append(alert)
-                    supabase.push_alert(alert.model_dump(mode="json"))
+                increment("fdd_faults_detected")
+                generate_recommendations_from_faults([fault])
+                increment("recommendations_generated")
+                fdd = _fault_to_fdd(fault, building_id)
+                fdd.equipment_id = eq
+                if not any(r.rule_id == fdd.rule_id and r.equipment_id == fdd.equipment_id for r in results):
+                    results.append(fdd)
+                    alert = Alert(
+                        id=f"alert-{uuid.uuid4().hex[:8]}",
+                        building_id=building_id,
+                        equipment_id=eq,
+                        severity=fdd.severity,
+                        category=fault.get("equipment_type", "FDD"),
+                        title=fdd.description[:80],
+                        message=fault.get("reason", fdd.description),
+                        message_ar="تم اكتشاف عطل",
+                        timestamp=fdd.detected_at,
+                        acknowledged=False,
+                    )
+                    if not any(a.title == alert.title and a.building_id == building_id for a in new_alerts):
+                        new_alerts.append(alert)
+                        supabase.push_alert(alert.model_dump(mode="json"))
 
     live_cache.set_fdd_results(results)
     live_cache.set_alerts(new_alerts)
     log_event(
         "info",
-        f"FDD engine: {len(results)} faults across {len(BUILDING_REGISTRY)} buildings",
+        f"FDD engine: {len(results)} faults from semantic mappings across {len(BUILDING_REGISTRY)} buildings",
         f"محرك FDD: {len(results)} أعطال",
     )
 
