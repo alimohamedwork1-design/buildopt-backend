@@ -1,65 +1,52 @@
-"""Batch telemetry ingestion from BuildOpt Edge."""
+"""Batch telemetry ingestion from BuildOpt Edge — Phase 3 provenance pipeline."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
-from app.services.edge_heartbeat_store import edge_heartbeat_store
 from app.database import get_influx_service
-from app.utils.arabic_utils import bilingual_error, bilingual_success
+from app.services.edge_heartbeat_store import edge_heartbeat_store
+from app.services.ingest_auth import authorize_gateway, verify_ingest_key
+from app.services.telemetry_pipeline import telemetry_pipeline
+from app.utils.arabic_utils import bilingual_success
+
+logger = logging.getLogger("buildopt.telemetry.api")
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 
-class TelemetryReading(BaseModel):
-    building_id: str
-    point_id: str
-    timestamp: datetime
-    value: float | str | int
-    unit: Optional[str] = None
-    quality: str = "GOOD"
+class TelemetryEvent(BaseModel):
+    event_id: Optional[str] = None
+    source_point_id: str
+    point_id: Optional[str] = None
     source: str = "metasys"
-    source_point_id: Optional[str] = None
-    equipment_id: Optional[str] = None
-    connector_id: Optional[str] = None
-    gateway_id: Optional[str] = None
+    source_name: Optional[str] = None
+    source_path: Optional[str] = None
+    source_type: Optional[str] = None
+    source_timestamp: Optional[datetime] = None
+    edge_received_at: Optional[datetime] = None
+    timestamp: Optional[datetime] = None  # legacy alias for source_timestamp
+    value: float | str | int
+    raw_unit: Optional[str] = None
+    unit: Optional[str] = None
+    quality: Optional[str] = None
+    source_quality: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
     tenant_id: Optional[str] = None
+    building_id: Optional[str] = None
 
 
 class TelemetryBatchRequest(BaseModel):
     gateway_id: str
     building_id: str
-    tenant_id: Optional[str] = None
-    readings: List[TelemetryReading] = Field(default_factory=list)
-
-
-def _verify_ingest_key(x_api_key: str | None) -> None:
-    settings = get_settings()
-    is_production = settings.app_env.lower() in ("production", "prod")
-    if is_production and not settings.ingest_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail=bilingual_error("Ingest API key not configured", "مفتاح الإدخال غير مُعد"),
-        )
-    if settings.ingest_api_key and x_api_key != settings.ingest_api_key:
-        raise HTTPException(status_code=401, detail=bilingual_error("Invalid API key", "مفتاح API غير صالح"))
-
-
-def _dedupe_readings(readings: List[TelemetryReading]) -> List[TelemetryReading]:
-    seen: set[str] = set()
-    out: List[TelemetryReading] = []
-    for r in readings:
-        key = f"{r.building_id}:{r.point_id}:{r.timestamp.isoformat()}"
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(r)
-    return out
+    tenant_id: str
+    connector_id: str = "metasys"
+    readings: List[TelemetryEvent] = Field(default_factory=list)
 
 
 @router.post("/batch")
@@ -67,49 +54,71 @@ async def ingest_telemetry_batch(
     body: TelemetryBatchRequest,
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
-    """Validate, deduplicate, and store edge telemetry batch."""
-    _verify_ingest_key(x_api_key)
+    verify_ingest_key(x_api_key)
+    authorize_gateway(
+        gateway_id=body.gateway_id,
+        tenant_id=body.tenant_id,
+        building_id=body.building_id,
+        connector_id=body.connector_id,
+    )
 
     if not body.readings:
         return {
             "accepted": 0,
             "rejected": 0,
+            "duplicates": 0,
+            "stored": 0,
             "message": bilingual_success("Empty batch acknowledged", "تم تأكيد دفعة فارغة"),
         }
 
-    unique = _dedupe_readings(body.readings)
+    raw_readings: List[Dict[str, Any]] = []
+    for r in body.readings:
+        row = r.model_dump()
+        if row.get("source_timestamp") is None and row.get("timestamp"):
+            row["source_timestamp"] = row["timestamp"]
+        if row.get("raw_unit") is None and row.get("unit"):
+            row["raw_unit"] = row["unit"]
+        raw_readings.append(row)
+
+    result = telemetry_pipeline.process_batch(
+        gateway_id=body.gateway_id,
+        tenant_id=body.tenant_id,
+        building_id=body.building_id,
+        connector_id=body.connector_id,
+        readings=raw_readings,
+    )
+
     influx = get_influx_service()
+    influx_state = influx.infrastructure_state()
     stored = 0
-    for reading in unique:
-        tags = {
-            "building_id": reading.building_id,
-            "point_id": reading.point_id,
-            "source": reading.source,
-            "gateway_id": body.gateway_id,
-        }
-        if isinstance(reading.value, (int, float)):
-            if influx.write_point(
-                measurement="telemetry_point",
-                value=float(reading.value),
-                tags=tags,
-            ):
-                stored += 1
+    if result.get("influx_rows"):
+        stored = influx.write_telemetry_rows(result["influx_rows"])
+        if stored < len(result["influx_rows"]) and influx_state["persistence"]:
+            logger.warning(
+                "Influx partial write stored=%s expected=%s",
+                stored,
+                len(result["influx_rows"]),
+            )
 
     edge_heartbeat_store.record_gateway(
         gateway_id=body.gateway_id,
         building_id=body.building_id,
         tenant_id=body.tenant_id,
-        protocol="edge",
-        telemetry_rate=len(unique),
-        queue_depth=0,
+        protocol=body.connector_id,
+        connector_id=body.connector_id,
+        telemetry_rate=result["accepted"],
         connector_status="ONLINE",
     )
 
     return {
-        "accepted": len(unique),
-        "stored": stored,
-        "rejected": len(body.readings) - len(unique),
+        "accepted": result["accepted"],
+        "rejected": result["rejected"],
+        "duplicates": result["duplicates"],
+        "stored": stored if influx_state["persistence"] else result["accepted"],
+        "rejections": result.get("rejections", []),
         "gateway_id": body.gateway_id,
         "building_id": body.building_id,
-        "message": bilingual_success("Telemetry batch ingested", "تم استلام دفعة القياس"),
+        "cloud_received_at": result["cloud_received_at"],
+        "influx": influx_state,
+        "message": bilingual_success("Telemetry batch processed", "تمت معالجة دفعة القياس"),
     }

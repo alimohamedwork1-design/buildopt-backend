@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime, timezone
 
 from app.services.edge_heartbeat_store import EdgeHeartbeatStore
+from app.services.telemetry_pipeline import stable_event_id
 
 
 def test_gateway_heartbeat_and_stale_state():
@@ -13,6 +14,7 @@ def test_gateway_heartbeat_and_stale_state():
         connector_status="ONLINE",
         telemetry_rate=12,
         queue_depth=3,
+        clock_drift_seconds=5,
     )
     gateways = store.list_gateways()
     assert len(gateways) == 1
@@ -21,14 +23,24 @@ def test_gateway_heartbeat_and_stale_state():
     assert gateways[0]["queue_depth"] == 3
 
 
-def test_telemetry_batch_dedupe_logic():
-    from app.api.telemetry import TelemetryReading, _dedupe_readings
-
+def test_stable_event_id_dedupe():
     ts = datetime.now(timezone.utc)
-    readings = [
-        TelemetryReading(building_id="b1", point_id="sat", timestamp=ts, value=13.5),
-        TelemetryReading(building_id="b1", point_id="sat", timestamp=ts, value=13.5),
-        TelemetryReading(building_id="b1", point_id="rat", timestamp=ts, value=24.0),
-    ]
-    unique = _dedupe_readings(readings)
-    assert len(unique) == 2
+    a = stable_event_id(
+        gateway_id="gw",
+        building_id="b1",
+        connector_id="metasys",
+        source_point_id="sat",
+        source_timestamp=ts,
+        edge_received_at=ts,
+        value=13.5,
+    )
+    b = stable_event_id(
+        gateway_id="gw",
+        building_id="b1",
+        connector_id="metasys",
+        source_point_id="sat",
+        source_timestamp=ts,
+        edge_received_at=ts,
+        value=13.5,
+    )
+    assert a == b

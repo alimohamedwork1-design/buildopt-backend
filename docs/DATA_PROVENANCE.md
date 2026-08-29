@@ -1,48 +1,59 @@
-# Data Provenance
+# BuildOpt Data Provenance
 
-BuildOpt operational data must be traceable. Live tenants must never receive data without knowing where it came from.
+Every live UI value must be traceable through an auditable chain.
 
----
+## Provenance chain
 
-## Modes
+```
+Tenant
+  └── Building
+        └── Gateway (gateway_id)
+              └── Connector (connector_id)
+                    └── Raw Point (source_point_id)
+                          └── Source system (metasys)
+                                └── Timestamps (source / edge / cloud)
+                                      └── Quality (source + normalized)
+                                            └── Freshness state
+```
 
-| Mode | Source | UI behavior |
-|------|--------|-------------|
-| **DEMO** | SIMULATED, mock-data.ts, simulationEngine.ts | Demo badge visible |
-| **LIVE** | METASYS, INFLUX, EDGE, IMPORT only | Empty/error if unavailable |
+## How BuildOpt proves origin
 
-Mode resolution:
-- Backend: `app/services/data_policy.py`
-- Frontend: `src/lib/data-mode.ts` — Supabase session always live
+1. **Gateway registration** — First authenticated heartbeat binds `gateway_id` → `tenant_id` + `building_id`. Cloud rejects cross-tenant/building uploads.
 
----
+2. **Raw Point Registry** — Discovery sync registers immutable `source_point_id` with connector metadata. Upserts use `UNIQUE(tenant_id, connector_id, source_point_id)`.
 
-## Provenance payload
+3. **Telemetry events** — Each reading carries stable `event_id`, three timestamps, and quality. Cloud validates against registry before storage.
 
-Backend: `app/models/provenance.py`  
-Frontend: `src/lib/data-source.ts` → `extractProvenance()`
+4. **Idempotency** — Replayed events (timeout, edge restart, cloud reconnect) match existing `event_id` and are counted as duplicates — no second time-series point.
 
----
+5. **Current state** — Latest value served from `point_current_state` with freshness computed from `last_cloud_received_at` vs `expected_interval_seconds`.
 
-## Live UI states
+6. **Frontend display** — Live Telemetry shows source name, quality, freshness state, and connector. No mock substitution in live mode.
 
-LIVE, STALE, OFFLINE, NOT_CONFIGURED, NO_DATA, PERMISSION_DENIED, API_ERROR, AUTH_ERROR, TIMEOUT
+## Pilot bootstrap: mapped_points.json
 
-Component: `src/components/ui/DataStateBanner.tsx`
+For Phase 3 pilot, edge may still load `config/mapped_points.json` (gitignored). Flow:
 
----
+```
+mapped_points.json (bootstrap)
+  → Edge discovery sync
+  → Raw Point Registry
+  → Telemetry collection
+  → (Future) Semantic Mapping layer
+```
 
-## Rules
+Manual JSON is **not** the permanent architecture — it bootstraps until Metasys discovery → registry → approved collection config is fully automated.
 
-1. LIVE API unavailable → typed error/empty — never mock fallback
-2. Empty LIVE array stays empty
-3. Missing LIVE metric → em dash or "No live data available"
-4. Charts never merge mock series in LIVE mode
-5. Production Supabase users cannot activate demo telemetry override
+## Legacy agent
 
----
+`edge/agent.py` is **deprecated**. It posted unprovenanced snapshots to `/ingest/live`. Production path is `buildopt-edge/` → `/telemetry/batch` with full provenance.
 
-## Tests
+## Future auth upgrade path
 
-- `tests/test_data_integrity.py`
-- `src/test/data-source.test.ts`
+Phase 3 retains shared `X-API-Key` for pilot bootstrap. Planned upgrades:
+
+- Per-gateway scoped tokens
+- Certificate-based gateway identity
+- mTLS for edge ↔ cloud
+
+Server-side gateway binding already prevents tenant/building spoofing regardless of payload claims.

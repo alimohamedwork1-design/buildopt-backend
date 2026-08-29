@@ -33,6 +33,8 @@ from app.services.building_store import (
 from app.services.excel_import import parse_building_excel
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.site_profile_store import get_site_profile, set_site_profile
+from app.services.telemetry_store import get_telemetry_store
+from app.database import get_influx_service
 from app.utils.arabic_utils import bilingual_error, bilingual_success
 
 router = APIRouter(prefix="/buildings", tags=["buildings"])
@@ -273,3 +275,44 @@ async def update_building_site_profile(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=bilingual_error(str(exc), str(exc))) from exc
     return {"building_id": building_id, "site_profile": saved}
+
+
+def _serialize_telemetry_point(point: dict) -> dict:
+    current = point.get("current") or {}
+    return {
+        "id": point["id"],
+        "source": point["source"],
+        "source_point_id": point["source_point_id"],
+        "source_name": point.get("source_name"),
+        "raw_unit": point.get("raw_unit"),
+        "gateway_id": point["gateway_id"],
+        "connector_id": point["connector_id"],
+        "value": current.get("last_value") if current.get("last_value") is not None else current.get("last_value_text"),
+        "quality": current.get("normalized_quality"),
+        "source_quality": current.get("source_quality"),
+        "source_timestamp": current.get("last_source_timestamp"),
+        "edge_received_at": current.get("last_edge_received_at"),
+        "cloud_received_at": current.get("last_cloud_received_at"),
+        "freshness_seconds": current.get("freshness_seconds"),
+        "expected_interval_seconds": current.get("expected_interval_seconds"),
+        "freshness_state": current.get("freshness_state"),
+        "state": current.get("state"),
+    }
+
+
+@router.get("/{building_id}/telemetry/current")
+async def building_telemetry_current(
+    building_id: str,
+    user: UserContext = Depends(get_optional_user),
+) -> dict:
+    assert_building_access(user, building_id)
+    store = get_telemetry_store()
+    tenant_id = user.user_id if user.authenticated else None
+    points = store.list_building_current(building_id, tenant_id=tenant_id)
+    influx = get_influx_service()
+    return {
+        "building_id": building_id,
+        "points": [_serialize_telemetry_point(p) for p in points],
+        "total": len(points),
+        "influx": influx.infrastructure_state(),
+    }

@@ -49,6 +49,9 @@ class InfluxService:
         measurement: str,
         value: float,
         tags: Optional[Dict[str, str]] = None,
+        *,
+        timestamp: Optional[datetime] = None,
+        fields: Optional[Dict[str, Any]] = None,
     ) -> bool:
         if self.demo_mode or self._client is None:
             return True
@@ -56,9 +59,19 @@ class InfluxService:
         try:
             from influxdb_client import Point, WritePrecision
 
-            point = Point(measurement).field("value", value).time(datetime.now(timezone.utc), WritePrecision.S)
+            ts = timestamp or datetime.now(timezone.utc)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            point = Point(measurement).field("value", value).time(ts, WritePrecision.S)
             for key, tag_value in (tags or {}).items():
-                point = point.tag(key, tag_value)
+                point = point.tag(key, str(tag_value))
+            for key, field_value in (fields or {}).items():
+                if isinstance(field_value, bool):
+                    point = point.field(key, field_value)
+                elif isinstance(field_value, (int, float)):
+                    point = point.field(key, float(field_value))
+                elif field_value is not None:
+                    point = point.field(key, str(field_value))
 
             write_api = self._client.write_api()
             write_api.write(bucket=self.bucket, org=self.org, record=point)
@@ -66,6 +79,32 @@ class InfluxService:
         except Exception as exc:
             logger.warning("InfluxDB write failed (%s): %s", measurement, exc)
             return False
+
+    def write_telemetry_rows(self, rows: List[Dict[str, Any]]) -> int:
+        """Write validated telemetry rows preserving source timestamps."""
+        if self.demo_mode or self._client is None:
+            return len(rows)
+        stored = 0
+        for row in rows:
+            if self.write_point(
+                measurement=row.get("measurement", "telemetry_point"),
+                value=row["value"],
+                tags=row.get("tags"),
+                timestamp=row.get("timestamp"),
+                fields=row.get("fields"),
+            ):
+                stored += 1
+        return stored
+
+    def infrastructure_state(self) -> Dict[str, Any]:
+        status = self.status()
+        return {
+            "configured": bool(self.token) and not self.demo_mode,
+            "status": status,
+            "url": self.url if status != "simulated" else None,
+            "bucket": self.bucket if status != "simulated" else None,
+            "persistence": status == "connected",
+        }
 
     def query_metrics(self, building_id: str, hours: int = 24) -> List[Dict[str, Any]]:
         if self.demo_mode or self._client is None:

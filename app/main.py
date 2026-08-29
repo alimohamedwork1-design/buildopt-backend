@@ -13,6 +13,7 @@ from app.api import (
     assistant,
     buildings,
     data_health,
+    discovery,
     energy,
     equipment,
     gateways,
@@ -22,6 +23,7 @@ from app.api import (
     jci,
     ml,
     modules,
+    points,
     protocols,
     recommendations,
     refrigeration,
@@ -129,6 +131,8 @@ app.include_router(recommendations.router, prefix=api_prefix)
 app.include_router(assistant.router, prefix=api_prefix)
 app.include_router(telemetry.router, prefix=api_prefix)
 app.include_router(gateways.router, prefix=api_prefix)
+app.include_router(discovery.router, prefix=api_prefix)
+app.include_router(points.router, prefix=api_prefix)
 
 
 @app.get("/")

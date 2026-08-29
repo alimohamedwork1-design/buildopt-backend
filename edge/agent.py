@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""BuildOpt edge gateway — polls BACnet/Modbus on-site and pushes to Railway API."""
+"""
+DEPRECATED — Legacy edge agent (BACnet/Modbus snapshots → /ingest/live).
+
+Use buildopt-edge/ for production telemetry with provenance.
+Set LEGACY_EDGE_ENABLED=true only for explicit legacy BACnet pilot separation.
+"""
 
 from __future__ import annotations
 
 import json
 import os
 import sqlite3
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -221,7 +227,14 @@ def flush_queue(conn: sqlite3.Connection) -> None:
 
 
 def main() -> None:
-    print(f"BuildOpt edge agent → {API_URL} building={BUILDING_ID} bacnet={ENABLE_BACNET}")
+    if os.getenv("LEGACY_EDGE_ENABLED", "false").lower() != "true":
+        print(
+            "Legacy edge/agent.py is DEPRECATED. Use buildopt-edge/ instead.\n"
+            "To run legacy BACnet agent explicitly: LEGACY_EDGE_ENABLED=true",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"BuildOpt LEGACY edge agent → {API_URL} building={BUILDING_ID} bacnet={ENABLE_BACNET}")
     conn = init_queue()
     heartbeat_counter = 0
 

@@ -33,28 +33,49 @@ class EdgeHeartbeatStore:
         building_id: str,
         tenant_id: Optional[str] = None,
         protocol: str = "edge",
+        connector_id: str = "metasys",
         version: str = "1.0.0",
         connector_status: str = "ONLINE",
         telemetry_rate: int = 0,
         queue_depth: int = 0,
-        last_read_at: Optional[datetime] = None,
+        oldest_queued_event_seconds: Optional[int] = None,
+        events_uploaded_total: int = 0,
+        events_queued_total: int = 0,
+        events_replayed_total: int = 0,
+        upload_failures_total: int = 0,
+        last_successful_upload_at: Optional[datetime] = None,
+        telemetry_rate_per_minute: float = 0.0,
+        clock_drift_seconds: Optional[int] = None,
+        edge_clock_at: Optional[datetime] = None,
         connector_error: Optional[str] = None,
+        last_read_at: Optional[datetime] = None,
     ) -> None:
-        now = last_read_at or datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)
+        existing = self._gateways.get(gateway_id, {})
         self._gateways[gateway_id] = {
             "gateway_id": gateway_id,
             "tenant_id": tenant_id,
             "building_id": building_id,
             "protocol": protocol,
+            "connector_id": connector_id,
             "version": version,
             "connector_status": connector_status,
             "telemetry_rate": telemetry_rate,
             "queue_depth": queue_depth,
+            "oldest_queued_event_seconds": oldest_queued_event_seconds,
+            "events_uploaded_total": events_uploaded_total or existing.get("events_uploaded_total", 0),
+            "events_queued_total": events_queued_total or existing.get("events_queued_total", 0),
+            "events_replayed_total": events_replayed_total or existing.get("events_replayed_total", 0),
+            "upload_failures_total": upload_failures_total or existing.get("upload_failures_total", 0),
+            "last_successful_upload_at": last_successful_upload_at or existing.get("last_successful_upload_at"),
+            "telemetry_rate_per_minute": telemetry_rate_per_minute,
+            "clock_drift_seconds": clock_drift_seconds,
+            "edge_clock_at": edge_clock_at.isoformat() if edge_clock_at else existing.get("edge_clock_at"),
             "last_seen": now,
-            "last_read_at": now,
+            "last_read_at": last_read_at or now,
             "connector_error": connector_error,
         }
-        self.record(building_id, protocol, now, telemetry_rate)
+        self.record(building_id, protocol, last_read_at or now, telemetry_rate)
 
     def get(self, protocol: str) -> Optional[Dict[str, Any]]:
         latest: Optional[Dict[str, Any]] = None
@@ -74,11 +95,21 @@ class EdgeHeartbeatStore:
         for gw in self._gateways.values():
             age = (now - gw["last_seen"]).total_seconds()
             state = gw["connector_status"]
-            if state == "ONLINE" and age > 120:
+            if state in ("ONLINE", "DEGRADED") and age > 120:
                 state = "STALE"
             if age > 600:
                 state = "OFFLINE"
-            out.append({**gw, "state": state, "freshness_seconds": int(age)})
+            last_upload = gw.get("last_successful_upload_at")
+            if isinstance(last_upload, datetime):
+                last_upload = last_upload.isoformat()
+            out.append(
+                {
+                    **gw,
+                    "state": state,
+                    "freshness_seconds": int(age),
+                    "last_successful_upload_at": last_upload,
+                }
+            )
         return sorted(out, key=lambda g: g["gateway_id"])
 
     def status(self, protocol: str, stale_seconds: int = 120) -> str:
