@@ -222,8 +222,10 @@ class MLOptimizeRequest(BaseModel):
 
 class MLOptimizeResponse(BaseModel):
     recommendations: List[Dict[str, Any]]
-    estimated_savings_pct: float
+    estimated_savings_pct: Optional[float] = None
     demo_mode: bool
+    engine_mode: str = "bounded_rule_advisor_shadow_only"
+    writeback_allowed: bool = False
 
 
 class ModelStatus(BaseModel):
