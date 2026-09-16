@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Literal
 
 ModuleMaturity = Literal["production", "pilot", "heuristic", "simulated", "concept"]
 
-# category → list of route slugs (without leading slash)
 MODULE_CATEGORIES: Dict[str, List[str]] = {
     "overview": [""],
     "telemetry": ["telemetry"],
@@ -23,14 +22,14 @@ MODULE_CATEGORIES: Dict[str, List[str]] = {
         "utility-rate", "tariff-intelligence", "dewa-hub", "metering-reconciliation",
         "anomaly-heatmap", "energy-genome", "chiller", "industrial-refrigeration", "solar-pv", "demand-shield",
     ],
+    "financial": [
+        "roi", "budget", "financial-modeling", "financial-consolidation", "predictive-budget",
+        "tenant-billing", "vendors", "benchmarking",
+    ],
     "equipment": ["equipment", "integration", "commissioning", "data-health", "system-status"],
     "gcc": [
-        "ramadan-prayer", "ramadan-ops", "sandstorm-weather", "dewa-hub",
-        "peak-season", "arabic-executive", "arabic-dashboard", "gcc-regulatory",
-    ],
-    "financial": [
-        "roi", "budget", "financial-modeling", "financial-consolidation",
-        "predictive-budget", "tenant-billing", "vendors", "benchmarking",
+        "ramadan-prayer", "ramadan-ops", "sandstorm-weather", "dewa-hub", "peak-season",
+        "arabic-executive", "arabic-dashboard", "gcc-regulatory",
     ],
     "carbon": ["carbon", "scope3", "lifecycle-carbon", "supply-chain-carbon", "net-zero", "sustainability-roadmap"],
     "tenant": ["tenant", "tenant-portal", "tenant-experience", "building-experience", "occupant-feedback"],
@@ -78,7 +77,6 @@ for route in ALL_ROUTES:
 
 GENERIC_CATEGORY = "generic"
 
-# Modules backed by dedicated live-domain APIs and stores today.
 PRODUCTION_MODULES = frozenset({
     "telemetry",
     "data-health",
@@ -88,11 +86,11 @@ PRODUCTION_MODULES = frozenset({
     "system-status",
 })
 
-# Modules suitable for controlled pilot use because they compose real data/services,
-# but still need site-specific validation before any enterprise claim.
 PILOT_MODULES = frozenset({
     "overview",
+    "portfolio",
     "reports",
+    "ai-chat",
     "ai-recommendations",
     "industrial-refrigeration",
     "integration",
@@ -105,8 +103,6 @@ PILOT_MODULES = frozenset({
     "settings",
 })
 
-# Modules that currently use deterministic rules, constrained advisors, or derived logic.
-# They are useful, but are not represented as trained/validated ML models.
 HEURISTIC_MODULES = frozenset({
     "optimization",
     "autopilot",
@@ -125,7 +121,6 @@ HEURISTIC_MODULES = frozenset({
     "commissioning-assistant",
 })
 
-# Forward-looking surfaces that must never be presented as implemented live engines.
 CONCEPT_MODULES = frozenset({
     "quantum-optimizer",
     "drone-fleet",
@@ -144,11 +139,13 @@ CONCEPT_MODULES = frozenset({
 
 CORE_PILOT_MODULES = frozenset({
     "overview",
+    "portfolio",
     "telemetry",
     "data-health",
     "equipment",
     "fdd",
     "alerts",
+    "ai-chat",
     "ai-recommendations",
     "optimization",
     "reports",
@@ -172,7 +169,12 @@ def get_module_capability(route: str) -> Dict[str, Any]:
     elif slug in PILOT_MODULES:
         maturity = "pilot"
         engine_mode = "specialized_pilot"
-        truth = "Real services/data are composed, but site-specific pilot validation is required."
+        if slug == "ai-chat":
+            truth = "Evidence/tool assistant over live BuildOpt services; not a standalone calibrated LLM."
+        elif slug == "portfolio":
+            truth = "Uses the real building registry; portfolio KPIs are shown only when source fields exist."
+        else:
+            truth = "Real services/data are composed, but site-specific pilot validation is required."
     elif slug in HEURISTIC_MODULES:
         maturity = "heuristic"
         engine_mode = "rule_or_derived"
