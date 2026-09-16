@@ -1,4 +1,4 @@
-"""Phases 8-11 — extended FDD, baseline, recommendations, savings."""
+"""Phases 8-13 — extended FDD, baseline, recommendations, savings."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ import pytest
 from app.services.baseline_engine import compute_historical_baseline, deviation_from_baseline
 from app.services.fdd_rule_framework import ALL_RULES, FddRuleEngine, PUMP_RULES
 from app.services.recommendation_engine import recommendation_from_fault
-from app.services.savings_mv_engine import create_potential_savings, verify_savings, savings_from_baseline
+from app.services.savings_mv_engine import create_potential_savings, verify_savings
+from app.services.savings_engine import SavingsState, transition_savings
 from app.services.shadow_optimization_engine import shadow_optimize
 from app.services.writeback_service import request_writeback, writeback_status, WRITEBACK_ENABLED
 from app.models.user_context import UserContext
@@ -65,12 +66,29 @@ def test_phase11_potential_not_verified():
     assert opp.verified_saving_aed is None
 
 
-def test_phase11_verify_requires_measurement_period():
-    opp = create_potential_savings(
+def test_phase11_verify_requires_implemented_lifecycle_and_measurement_period():
+    create_potential_savings(
         opp_id="s2", building_id="b1", title="Test", baseline_kwh=1000, expected_kwh=900, data_coverage_pct=80,
     )
+    with pytest.raises(ValueError, match="verification_requires_implemented_or_monitoring"):
+        verify_savings("s2", actual_kwh=850, measurement_days=5)
+
+    transition_savings("s2", SavingsState.APPROVED, actor_user_id="u1")
+    transition_savings("s2", SavingsState.IMPLEMENTED, actor_user_id="u1")
     monitored = verify_savings("s2", actual_kwh=850, measurement_days=5)
     assert monitored.state.value == "MONITORING"
+    assert monitored.verified_saving_aed is None
+
+
+def test_phase11_verified_requires_complete_measurement_period():
+    create_potential_savings(
+        opp_id="s3", building_id="b1", title="Test", baseline_kwh=1000, expected_kwh=900, data_coverage_pct=80,
+    )
+    transition_savings("s3", SavingsState.APPROVED, actor_user_id="u1")
+    transition_savings("s3", SavingsState.IMPLEMENTED, actor_user_id="u1")
+    result = verify_savings("s3", actual_kwh=850, measurement_days=14)
+    assert result.state.value == "VERIFIED"
+    assert result.verified_saving_aed == pytest.approx(57.0)
 
 
 def test_phase12_shadow_no_writeback():
