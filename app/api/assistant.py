@@ -11,7 +11,7 @@ router = APIRouter(prefix="/assistant", tags=["assistant"])
 @router.post("/query")
 async def assistant_query(
     body: dict,
-    user: UserContext = Depends(require_module_enabled("ai-chat-assistant")),
+    user: UserContext = Depends(require_module_enabled("ai-chat")),
 ):
     building_id = body.get("building_id", "")
     tool = body.get("tool", "building_live")
@@ -28,15 +28,17 @@ async def assistant_query(
         return {
             "answer": "Unknown tool.",
             "evidence": [],
-            "confidence": 0,
+            "confidence": None,
+            "confidence_basis": "not_calibrated",
             "limitations": [f"Tool '{tool}' not registered"],
             "data_sources": [],
             "building_id": building_id or None,
             "period": None,
             "recommended_next_action": "Use a registered tool name",
+            "assistant_mode": "evidence_tool_router",
         }
 
-    result = await invoke_tool(tool, building_id)
+    result = await invoke_tool(tool, building_id, user=user)
     available = result.get("available", True) if isinstance(result, dict) else bool(result)
     limitations = [] if available else ["Required telemetry not available"]
     if isinstance(result, dict) and result.get("state") == "INSUFFICIENT_DATA":
@@ -45,19 +47,22 @@ async def assistant_query(
 
     return {
         "answer": (
-            f"Live data retrieved for building {building_id} via {tool}."
+            f"Evidence retrieved for building {building_id} via {tool}."
             if available
-            else "No live data available for this question — connect BMS and complete semantic mapping."
+            else "No live evidence is available for this question — connect BMS and complete semantic mapping."
         ),
         "question": question,
         "tool": tool,
         "building_id": building_id or None,
         "period": body.get("period"),
         "evidence": result if isinstance(result, (list, dict)) else [result],
-        "confidence": 0.9 if available else 0,
+        # No calibrated probabilistic model produces this answer today.
+        "confidence": None,
+        "confidence_basis": "not_calibrated",
         "limitations": limitations,
         "data_sources": [tool],
         "recommended_next_action": (
-            "Connect BMS and complete point mapping" if not available else "Review evidence and approve recommendations if applicable"
+            "Connect BMS and complete point mapping" if not available else "Review the cited evidence before taking an operational action"
         ),
+        "assistant_mode": "evidence_tool_router",
     }
