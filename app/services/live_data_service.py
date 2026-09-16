@@ -73,7 +73,6 @@ def list_buildings(user: Optional[UserContext] = None) -> List[BuildingSummary]:
     results = []
     for cfg in BUILDING_REGISTRY:
         cached = live_cache.get_live(cfg["id"])
-        savings = 0.0
         alerts = len([a for a in live_cache.get_alerts() if a.building_id == cfg["id"]])
         results.append(
             BuildingSummary(
@@ -83,7 +82,9 @@ def list_buildings(user: Optional[UserContext] = None) -> List[BuildingSummary]:
                 floors=cfg["floors"],
                 area_sqm=cfg["area_sqm"],
                 status="online" if cached else "maintenance",
-                energy_savings_pct=savings,
+                # Aggregate verified savings are provided by the M&V workflow. Do not
+                # infer a percentage from a live snapshot.
+                energy_savings_pct=0.0,
                 active_alerts=alerts,
                 site_profile=get_site_profile(cfg["id"]),
             )
@@ -98,7 +99,7 @@ def get_building(building_id: str, user: Optional[UserContext] = None) -> Option
     cfg = get_building_config(building_id)
     if not cfg:
         return None
-    summary = next((b for b in list_buildings() if b.id == building_id), None)
+    summary = next((b for b in list_buildings(user=user) if b.id == building_id), None)
     if not summary:
         return None
     return BuildingDetail(
@@ -171,9 +172,14 @@ async def poll_metasys_buildings() -> int:
         tags = {"building_id": cfg["id"]}
         influx.write_point("total_kw", live.energy.total_kw, tags)
         influx.write_point("hvac_kw", live.energy.hvac_kw, tags)
+        influx.write_point("lighting_kw", live.energy.lighting_kw, tags)
+        influx.write_point("other_kw", live.energy.other_kw, tags)
         influx.write_point("supply_air_temp", live.hvac.supply_air_temp, tags)
+        influx.write_point("return_air_temp", live.hvac.return_air_temp, tags)
         influx.write_point("temp_c", live.environment.temp_c, tags)
+        influx.write_point("humidity_pct", live.environment.humidity_pct, tags)
         influx.write_point("co2_ppm", float(live.environment.co2_ppm), tags)
+        influx.write_point("pm25", live.environment.pm25, tags)
         influx.write_point("cop", live.hvac.cop, tags)
         polled += 1
     return polled
@@ -193,14 +199,36 @@ async def _fetch_live_from_metasys(building_id: str, cfg: Dict[str, Any]) -> Opt
             except (TypeError, ValueError):
                 pass
 
-    if not values:
+    # No plausible-number fallbacks in LIVE mode. The semantic mapper must supply
+    # the minimum snapshot contract before the building can be considered live-ready.
+    required = {
+        "supply_air_temp",
+        "return_air_temp",
+        "hvac_power_kw",
+        "total_kw",
+        "lighting_kw",
+        "other_kw",
+        "temp_c",
+        "humidity_pct",
+        "co2_ppm",
+        "pm25",
+    }
+    if not required.issubset(values):
         return None
 
-    supply = values.get("supply_air_temp", 14.0)
-    return_air = values.get("return_air_temp", 24.0)
-    hvac_kw = values.get("hvac_power_kw", 195.0)
-    total_kw = values.get("total_kw", hvac_kw * 4.2)
-    cop = max(3.0, min(5.0, (return_air - supply) / max(hvac_kw / 100, 0.1)))
+    supply = values["supply_air_temp"]
+    return_air = values["return_air_temp"]
+    hvac_kw = values["hvac_power_kw"]
+    total_kw = values["total_kw"]
+    cop = values.get("cop")
+    if cop is None:
+        thermal_delta = max(return_air - supply, 0.0)
+        if hvac_kw <= 0 or thermal_delta <= 0:
+            return None
+        # This derived COP is only a fallback when a mapped COP point is unavailable.
+        # It is intentionally not clamped to a cosmetically plausible range.
+        cop = thermal_delta / max(hvac_kw / 100.0, 0.1)
+
     hour = datetime.now(timezone.utc).hour
     tariff = 0.38 if 12 <= hour < 24 else 0.23
 
@@ -212,21 +240,21 @@ async def _fetch_live_from_metasys(building_id: str, cfg: Dict[str, Any]) -> Opt
             return_air_temp=return_air,
             delta_t=round(return_air - supply, 1),
             power_kw=hvac_kw,
-            cop=round(cop, 1),
+            cop=round(float(cop), 2),
         ),
         energy=EnergyData(
             total_kw=total_kw,
             hvac_kw=hvac_kw,
-            lighting_kw=round(total_kw * 0.15, 1),
-            other_kw=round(total_kw * 0.55, 1),
+            lighting_kw=values["lighting_kw"],
+            other_kw=values["other_kw"],
             tariff_rate=tariff,
-            cost_per_hour=round(total_kw * tariff, 1),
+            cost_per_hour=round(total_kw * tariff, 2),
         ),
         environment=EnvironmentData(
-            temp_c=values.get("temp_c", 23.0),
-            humidity_pct=values.get("humidity_pct", 48.0),
-            co2_ppm=int(values.get("co2_ppm", 600)),
-            pm25=values.get("pm25", 20.0),
+            temp_c=values["temp_c"],
+            humidity_pct=values["humidity_pct"],
+            co2_ppm=int(values["co2_ppm"]),
+            pm25=values["pm25"],
         ),
         active_alerts=len([a for a in live_cache.get_alerts() if a.building_id == building_id]),
         demo_mode=False,
@@ -241,10 +269,7 @@ def get_building_metrics(building_id: str, period: str = "24h", user: Optional[U
         points = influx.query_metrics(building_id, hours=hours)
         if not points:
             return None
-        metrics = [
-            MetricPoint(timestamp=p["timestamp"], value=p["value"], metric=p["metric"])
-            for p in points
-        ]
+        metrics = [MetricPoint(timestamp=p["timestamp"], value=p["value"], metric=p["metric"]) for p in points]
         return BuildingMetrics(building_id=building_id, period=period, metrics=metrics)
 
     if allows_simulated_telemetry(user):
@@ -256,10 +281,7 @@ def get_building_metrics(building_id: str, period: str = "24h", user: Optional[U
     if not points:
         return None
 
-    metrics = [
-        MetricPoint(timestamp=p["timestamp"], value=p["value"], metric=p["metric"])
-        for p in points
-    ]
+    metrics = [MetricPoint(timestamp=p["timestamp"], value=p["value"], metric=p["metric"]) for p in points]
     return BuildingMetrics(building_id=building_id, period=period, metrics=metrics)
 
 
@@ -277,15 +299,13 @@ def get_energy_consumption(
     if not live:
         return None
 
-    hour = datetime.now(timezone.utc).hour
-    tariff = 0.38 if 12 <= hour < 24 else 0.23
     return EnergyConsumption(
         timestamp=live.timestamp,
         total_kw=live.energy.total_kw,
         hvac_kw=live.energy.hvac_kw,
         lighting_kw=live.energy.lighting_kw,
         other_kw=live.energy.other_kw,
-        cost_aed_per_hour=round(live.energy.total_kw * tariff, 1),
+        cost_aed_per_hour=round(live.energy.total_kw * live.energy.tariff_rate, 2),
         demo_mode=False,
     )
 
@@ -298,34 +318,25 @@ def get_energy_forecast(
     if allows_simulated_telemetry(user):
         return demo_mode.get_energy_forecast(building_id, horizon_hours)
 
-    influx = _influx(force_live=True)
-    history = influx.query_hourly_kw(building_id, hours=24)
-    if not history:
-        return EnergyForecast(
-            building_id=building_id,
-            horizon_hours=horizon_hours,
-            forecast=[],
-            demo_mode=False,
-        )
+    # Lazy import avoids a module-import cycle: the forecaster reads history through
+    # get_building_metrics().
+    from app.ml.history_forecaster import HistoryForecaster
 
-    values = [h["value"] for h in history if h.get("metric") == "total_kw"] or [h["value"] for h in history]
-    base_kw = sum(values) / max(len(values), 1)
-    now = datetime.now(timezone.utc)
-    forecast_points: List[EnergyForecastPoint] = []
-    for hour in range(1, horizon_hours + 1):
-        ts = now + timedelta(hours=hour)
-        hour_factor = 1.15 if 12 <= ts.hour < 24 else 0.85
-        forecast_points.append(
-            EnergyForecastPoint(
-                timestamp=ts,
-                predicted_kw=round(base_kw * hour_factor, 1),
-                confidence=0.88,
-            )
+    result = HistoryForecaster().forecast(building_id, horizon_hours)
+    if not result.get("available"):
+        return None
+    points = [
+        EnergyForecastPoint(
+            timestamp=datetime.fromisoformat(str(row["timestamp"]).replace("Z", "+00:00")),
+            predicted_kw=float(row["predicted_kw"]),
+            confidence=float(row["confidence"]),
         )
+        for row in result.get("forecast", [])
+    ]
     return EnergyForecast(
         building_id=building_id,
-        horizon_hours=horizon_hours,
-        forecast=forecast_points,
+        horizon_hours=int(result["horizon_hours"]),
+        forecast=points,
         demo_mode=False,
     )
 
@@ -337,37 +348,38 @@ def get_energy_savings(
     if allows_simulated_telemetry(user):
         return demo_mode.get_energy_savings()
 
+    # Use two real metered periods. Never invent a baseline by multiplying actual use.
     influx = _influx(force_live=True)
-    history = influx.query_hourly_kw(building_id, hours=720)
-    if history:
-        actual_kwh = sum(h["value"] for h in history)
-        baseline_kwh = actual_kwh * 1.2
-        savings_kwh = baseline_kwh - actual_kwh
-        savings_pct = round((savings_kwh / baseline_kwh) * 100, 1) if baseline_kwh else 0
-        return EnergySavings(
-            baseline_kwh=round(baseline_kwh, 0),
-            actual_kwh=round(actual_kwh, 0),
-            savings_kwh=round(savings_kwh, 0),
-            savings_pct=savings_pct,
-            cost_saved_aed=round(savings_kwh * 0.30, 2),
-            demo_mode=False,
-        )
+    history = [h for h in influx.query_hourly_kw(building_id, hours=1440) if h.get("metric") == "total_kw"]
+    if not history:
+        return None
 
-    live = live_cache.get_live(building_id)
-    if live:
-        actual = live.energy.total_kw * 24 * 30
-        baseline = actual * 1.18
-        savings_kwh = baseline - actual
-        return EnergySavings(
-            baseline_kwh=round(baseline, 0),
-            actual_kwh=round(actual, 0),
-            savings_kwh=round(savings_kwh, 0),
-            savings_pct=round((savings_kwh / baseline) * 100, 1) if baseline else 0,
-            cost_saved_aed=round(savings_kwh * 0.30, 2),
-            demo_mode=False,
-        )
+    now = datetime.now(timezone.utc)
+    reporting_start = now - timedelta(days=30)
+    baseline_start = now - timedelta(days=60)
+    baseline_values = [float(h["value"]) for h in history if baseline_start <= h["timestamp"] < reporting_start]
+    reporting_values = [float(h["value"]) for h in history if h["timestamp"] >= reporting_start]
 
-    return None
+    # Require at least one week of hourly observations in each period.
+    if len(baseline_values) < 168 or len(reporting_values) < 168:
+        return None
+
+    actual_kwh = sum(reporting_values)
+    baseline_mean_kw = sum(baseline_values) / len(baseline_values)
+    normalized_baseline_kwh = baseline_mean_kw * len(reporting_values)
+    savings_kwh = normalized_baseline_kwh - actual_kwh
+    savings_pct = (savings_kwh / normalized_baseline_kwh * 100.0) if normalized_baseline_kwh else 0.0
+
+    live = live_cache.get_live(building_id) or influx.get_latest_snapshot(building_id)
+    tariff_rate = live.energy.tariff_rate if live else 0.0
+    return EnergySavings(
+        baseline_kwh=round(normalized_baseline_kwh, 2),
+        actual_kwh=round(actual_kwh, 2),
+        savings_kwh=round(savings_kwh, 2),
+        savings_pct=round(savings_pct, 2),
+        cost_saved_aed=round(savings_kwh * tariff_rate, 2) if tariff_rate > 0 else 0.0,
+        demo_mode=False,
+    )
 
 
 def get_dewa_tariff(
@@ -390,7 +402,10 @@ def get_dewa_tariff(
 
     peak_kwh = live.energy.total_kw * 12
     off_peak_kwh = live.energy.total_kw * 12
-    tariff = calculate_dewa_tariff(peak_kwh, off_peak_kwh, 950.0)
+    # Until a separately metered kVA demand point is mapped, use the current kW as a
+    # conservative proxy rather than a hard-coded site-wide demand value.
+    demand_proxy = max(live.energy.total_kw, 0.0)
+    tariff = calculate_dewa_tariff(peak_kwh, off_peak_kwh, demand_proxy)
     live_cache.set_dewa_tariff(tariff.model_dump(mode="json"))
     return tariff
 
@@ -413,12 +428,12 @@ def list_equipment(
     return [
         EquipmentSummary(
             id=f"{bid}-hvac-plant",
-            name="HVAC Plant (live)",
+            name="HVAC Plant (derived live aggregate)",
             type="chiller",
             building_id=bid,
             status="running" if live.hvac.cop >= 3.2 else "fault",
             power_kw=live.energy.hvac_kw,
-            efficiency=min(0.98, max(0.7, live.hvac.cop / 5.0)),
+            efficiency=min(0.98, max(0.0, live.hvac.cop / 5.0)),
         )
     ]
 
@@ -427,17 +442,8 @@ def get_equipment(equipment_id: str, user: Optional[UserContext] = None) -> Opti
     if allows_simulated_telemetry(user):
         return demo_mode.get_equipment(equipment_id)
 
-    detail = demo_mode.get_equipment(equipment_id)
-    if not detail:
-        return None
-    live = live_cache.get_live(detail.building_id)
-    if live:
-        return detail.model_copy(
-            update={
-                "current_value": live.hvac.supply_air_temp,
-                "power_kw": live.energy.hvac_kw,
-            }
-        )
+    # A real equipment detail requires asset metadata (setpoint, maintenance date,
+    # fault code). Do not hydrate those fields from the demo registry in LIVE mode.
     return None
 
 
@@ -445,12 +451,8 @@ def get_equipment_history(equipment_id: str, user: Optional[UserContext] = None)
     if allows_simulated_telemetry(user):
         return demo_mode.get_equipment_history(equipment_id)
 
-    detail = demo_mode.get_equipment(equipment_id)
-    if not detail:
-        return []
-    metrics = get_building_metrics(detail.building_id, "24h", user=user)
-    if metrics:
-        return metrics.metrics
+    # History is exposed through mapped telemetry points/data-health until a durable
+    # equipment/asset registry maps equipment_id -> building_id + point ids.
     return []
 
 
@@ -463,9 +465,7 @@ def list_alerts(user: Optional[UserContext] = None) -> List[Alert]:
 
 def list_alert_history(user: Optional[UserContext] = None) -> List[Alert]:
     alerts = list_alerts(user=user)
-    for alert in alerts:
-        alert.acknowledged = True
-    return alerts
+    return [a.model_copy(update={"acknowledged": True}) for a in alerts]
 
 
 def acknowledge_alert(alert_id: str, acknowledged_by: Optional[str] = None) -> bool:
@@ -518,8 +518,14 @@ def ingest_live_snapshot(data: LiveBuildingData) -> None:
     tags = {"building_id": data.building_id}
     influx.write_point("total_kw", data.energy.total_kw, tags)
     influx.write_point("hvac_kw", data.energy.hvac_kw, tags)
+    influx.write_point("lighting_kw", data.energy.lighting_kw, tags)
+    influx.write_point("other_kw", data.energy.other_kw, tags)
+    influx.write_point("supply_air_temp", data.hvac.supply_air_temp, tags)
+    influx.write_point("return_air_temp", data.hvac.return_air_temp, tags)
     influx.write_point("temp_c", data.environment.temp_c, tags)
+    influx.write_point("humidity_pct", data.environment.humidity_pct, tags)
     influx.write_point("co2_ppm", float(data.environment.co2_ppm), tags)
+    influx.write_point("pm25", data.environment.pm25, tags)
     influx.write_point("cop", data.hvac.cop, tags)
 
 
