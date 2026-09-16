@@ -1,6 +1,12 @@
-"""Maps all build-opt.site routes to API data categories."""
+"""BuildOpt module registry and product-truth capability metadata.
 
-from typing import Dict, List, Optional
+The registry intentionally separates route availability from implementation maturity.
+A page existing in the product does not imply that its domain engine is production-ready.
+"""
+
+from typing import Any, Dict, List, Literal
+
+ModuleMaturity = Literal["production", "pilot", "heuristic", "simulated", "concept"]
 
 # category → list of route slugs (without leading slash)
 MODULE_CATEGORIES: Dict[str, List[str]] = {
@@ -39,13 +45,11 @@ MODULE_CATEGORIES: Dict[str, List[str]] = {
     "infrastructure": ["water", "vertical-transport", "backup-power", "sensor-mesh", "bim-integration"],
 }
 
-# Build reverse lookup: slug → category
 ROUTE_TO_CATEGORY: Dict[str, str] = {}
 for category, slugs in MODULE_CATEGORIES.items():
     for slug in slugs:
         ROUTE_TO_CATEGORY[slug or ""] = category
 
-# All known routes (172+ feature routes from site audit)
 ALL_ROUTES: List[str] = sorted(set(
     [s for slugs in MODULE_CATEGORIES.values() for s in slugs if s]
     + [
@@ -68,12 +72,90 @@ ALL_ROUTES: List[str] = sorted(set(
     ]
 ))
 
-# Assign uncategorized routes to "generic"
 for route in ALL_ROUTES:
     if route not in ROUTE_TO_CATEGORY:
         ROUTE_TO_CATEGORY[route] = "generic"
 
 GENERIC_CATEGORY = "generic"
+
+# Modules backed by dedicated live-domain APIs and stores today.
+PRODUCTION_MODULES = frozenset({
+    "telemetry",
+    "data-health",
+    "equipment",
+    "alerts",
+    "fdd",
+    "system-status",
+})
+
+# Modules suitable for controlled pilot use because they compose real data/services,
+# but still need site-specific validation before any enterprise claim.
+PILOT_MODULES = frozenset({
+    "overview",
+    "reports",
+    "ai-recommendations",
+    "industrial-refrigeration",
+    "integration",
+    "commissioning",
+    "roi",
+    "openblue-bridge",
+    "metasys-deep-link",
+    "tag-mapper",
+    "setpoint-writeback",
+    "settings",
+})
+
+# Modules that currently use deterministic rules, constrained advisors, or derived logic.
+# They are useful, but are not represented as trained/validated ML models.
+HEURISTIC_MODULES = frozenset({
+    "optimization",
+    "autopilot",
+    "whatif",
+    "digital-twin",
+    "demand-response",
+    "adaptive-setpoints",
+    "load-balancing",
+    "chiller",
+    "fault-prediction",
+    "anomaly-explainer",
+    "anomaly-heatmap",
+    "predictive",
+    "causal-chain",
+    "causal-ai",
+    "commissioning-assistant",
+})
+
+# Forward-looking surfaces that must never be presented as implemented live engines.
+CONCEPT_MODULES = frozenset({
+    "quantum-optimizer",
+    "drone-fleet",
+    "sovereign-llm",
+    "voice-twin",
+    "human-twin",
+    "air-quality-trading",
+    "tenant-carbon-market",
+    "carbon-vault",
+    "self-healing",
+    "federated-learning",
+    "generative-retrofit",
+    "biodiversity",
+    "carbon-aware-compute",
+})
+
+CORE_PILOT_MODULES = frozenset({
+    "overview",
+    "telemetry",
+    "data-health",
+    "equipment",
+    "fdd",
+    "alerts",
+    "ai-recommendations",
+    "optimization",
+    "reports",
+    "integration",
+    "system-status",
+    "settings",
+})
 
 
 def get_category(route: str) -> str:
@@ -81,8 +163,39 @@ def get_category(route: str) -> str:
     return ROUTE_TO_CATEGORY.get(slug, GENERIC_CATEGORY)
 
 
-def list_modules() -> List[Dict[str, str]]:
-    modules = []
+def get_module_capability(route: str) -> Dict[str, Any]:
+    slug = (route or "overview").strip("/").split("/")[0] or "overview"
+    if slug in PRODUCTION_MODULES:
+        maturity: ModuleMaturity = "production"
+        engine_mode = "specialized_live"
+        truth = "Dedicated live backend path exists; site validation still applies."
+    elif slug in PILOT_MODULES:
+        maturity = "pilot"
+        engine_mode = "specialized_pilot"
+        truth = "Real services/data are composed, but site-specific pilot validation is required."
+    elif slug in HEURISTIC_MODULES:
+        maturity = "heuristic"
+        engine_mode = "rule_or_derived"
+        truth = "Uses rules or derived calculations; not a validated trained ML engine."
+    elif slug in CONCEPT_MODULES:
+        maturity = "concept"
+        engine_mode = "concept_only"
+        truth = "Product concept surface; no production live engine is claimed."
+    else:
+        maturity = "simulated"
+        engine_mode = "generic_demo_or_live_shell"
+        truth = "UI/data shell exists; domain-specific production engine is not yet implemented."
+
+    return {
+        "maturity": maturity,
+        "engine_mode": engine_mode,
+        "core_pilot": slug in CORE_PILOT_MODULES,
+        "truth": truth,
+    }
+
+
+def list_modules() -> List[Dict[str, Any]]:
+    modules: List[Dict[str, Any]] = []
     seen = set()
     for route in [""] + ALL_ROUTES:
         slug = route or "overview"
@@ -95,5 +208,6 @@ def list_modules() -> List[Dict[str, str]]:
             "path": f"/{route}" if route else "/",
             "category": cat,
             "api_endpoint": f"/api/v1/modules/{slug}/data",
+            **get_module_capability(slug),
         })
     return modules
