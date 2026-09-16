@@ -59,17 +59,17 @@ class BuildingSummary(BaseModel):
     id: str
     name: str
     location: str
-    floors: int
-    area_sqm: float
+    floors: Optional[int] = None
+    area_sqm: Optional[float] = None
     status: Literal["online", "offline", "maintenance"]
-    energy_savings_pct: float
-    active_alerts: int
+    energy_savings_pct: Optional[float] = None
+    active_alerts: Optional[int] = None
     site_profile: SiteProfile = "building_only"
 
 
 class BuildingDetail(BuildingSummary):
     bms_type: str
-    installed_capacity_kw: float
+    installed_capacity_kw: Optional[float] = None
     last_updated: datetime
 
 
@@ -222,8 +222,10 @@ class MLOptimizeRequest(BaseModel):
 
 class MLOptimizeResponse(BaseModel):
     recommendations: List[Dict[str, Any]]
-    estimated_savings_pct: float
+    estimated_savings_pct: Optional[float] = None
     demo_mode: bool
+    engine_mode: str = "bounded_rule_advisor_shadow_only"
+    writeback_allowed: bool = False
 
 
 class ModelStatus(BaseModel):

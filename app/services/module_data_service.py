@@ -1,4 +1,8 @@
-"""Generates module-specific payloads for all build-opt.site pages."""
+"""Generates module-specific payloads while preserving product truth.
+
+Demo accounts may receive deterministic simulated content. Live accounts never receive
+simulated domain values for modules that do not have a live/pilot/heuristic engine.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +11,10 @@ import random
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from app.data.modules_registry import get_category
+from app.data.modules_registry import get_category, get_module_capability
+from app.models.provenance import build_provenance
 from app.models.user_context import UserContext
 from app.services import live_data_service
-from app.models.provenance import build_provenance
 from app.services.data_policy import allows_simulated_telemetry, resolve_data_mode
 from app.utils.gcc_features import get_ramadan_mode
 
@@ -44,8 +48,24 @@ def _metric_cards(rng: random.Random, category: str) -> List[Dict[str, Any]]:
     ]
 
 
-def _empty_live_payload(slug: str, building_id: str, category: str, reason: str) -> Dict[str, Any]:
+def _empty_live_payload(
+    slug: str,
+    building_id: str,
+    category: str,
+    reason: str,
+    capability: Dict[str, Any],
+) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
+    message = {
+        "en": "No live data received for this module yet.",
+        "ar": "لم يتم استلام بيانات حية لهذه الوحدة بعد.",
+    }
+    if reason == "CAPABILITY_NOT_IMPLEMENTED":
+        message = {
+            "en": "This module is not implemented as a live production engine yet.",
+            "ar": "هذه الوحدة ليست منفذة بعد كمحرك إنتاج حي.",
+        }
+
     return {
         "slug": slug or "overview",
         "path": f"/{slug}" if slug else "/",
@@ -58,14 +78,12 @@ def _empty_live_payload(slug: str, building_id: str, category: str, reason: str)
         "empty_state": True,
         "reason": reason,
         "state": "NO_DATA",
-        "message": {
-            "en": "No live data received for this module yet.",
-            "ar": "لم يتم استلام بيانات حية لهذه الوحدة بعد.",
-        },
+        "message": message,
         "metric_cards": [],
         "charts": {},
         "recommendations": [],
         "recent_activity": [],
+        "capability": capability,
         "provenance": build_provenance(source=None, mode="LIVE", building_id=building_id, quality="UNKNOWN"),
     }
 
@@ -75,15 +93,31 @@ async def get_module_data(
     building_id: str = "burj-khalifa-01",
     user: Optional[UserContext] = None,
 ) -> Dict[str, Any]:
+    normalized_slug = slug or "overview"
     category = get_category(slug)
+    capability = get_module_capability(normalized_slug)
     now = datetime.now(timezone.utc)
     simulate = allows_simulated_telemetry(user)
+
+    # Critical product-truth guard: a generic/concept UI must not become "live"
+    # merely because a building has telemetry available.
+    if not simulate and capability["maturity"] in {"simulated", "concept"}:
+        payload = _empty_live_payload(
+            slug,
+            building_id,
+            category,
+            "CAPABILITY_NOT_IMPLEMENTED",
+            capability,
+        )
+        if category == "gcc":
+            payload["ramadan"] = get_ramadan_mode().model_dump(mode="json")
+        return payload
 
     live_data = await live_data_service.get_live_data(building_id, user=user)
     is_demo = simulate and (live_data is None or live_data.demo_mode)
 
     if not simulate and live_data is None:
-        payload = _empty_live_payload(slug, building_id, category, "NO_TELEMETRY")
+        payload = _empty_live_payload(slug, building_id, category, "NO_TELEMETRY", capability)
         if category == "gcc":
             payload["ramadan"] = get_ramadan_mode().model_dump(mode="json")
         return payload
@@ -91,7 +125,7 @@ async def get_module_data(
     rng = _seed(f"{slug}-{building_id}") if simulate else None
 
     payload: Dict[str, Any] = {
-        "slug": slug or "overview",
+        "slug": normalized_slug,
         "path": f"/{slug}" if slug else "/",
         "category": category,
         "building_id": building_id,
@@ -101,6 +135,7 @@ async def get_module_data(
         "data_origin": live_data.source if live_data else ("SIMULATED" if simulate else None),
         "mode": resolve_data_mode(user),
         "state": "LIVE" if live_data and not is_demo else ("NO_DATA" if not simulate and not live_data else "DEMO"),
+        "capability": capability,
     }
 
     if simulate and rng is not None:
@@ -111,7 +146,7 @@ async def get_module_data(
         payload["demo_mode"] = live_data.demo_mode
         if not live_data.demo_mode:
             payload["metric_cards"] = _live_metric_cards(live_data, category)
-            payload["charts"] = _live_charts(live_data, building_id)
+            payload["charts"] = _live_charts(live_data, building_id, user=user)
 
     if category in ("overview", "telemetry", "equipment", "optimization"):
         equipment = live_data_service.list_equipment(building_id, user=user)
@@ -179,48 +214,76 @@ async def get_module_data(
 
 def _live_metric_cards(live, category: str) -> List[Dict[str, Any]]:
     cards = [
-        {"label": "Peak kW", "unit": "kW", "value": round(live.energy.total_kw, 1), "trend_pct": 0},
-        {"label": "HVAC COP", "unit": "", "value": live.hvac.cop, "trend_pct": 0},
-        {"label": "CO₂", "unit": "ppm", "value": live.environment.co2_ppm, "trend_pct": 0},
-        {"label": "Alerts", "unit": "", "value": live.active_alerts, "trend_pct": 0},
+        {"label": "Peak kW", "unit": "kW", "value": round(live.energy.total_kw, 1), "trend_pct": None},
+        {"label": "HVAC COP", "unit": "", "value": live.hvac.cop, "trend_pct": None},
+        {"label": "CO₂", "unit": "ppm", "value": live.environment.co2_ppm, "trend_pct": None},
+        {"label": "Alerts", "unit": "", "value": live.active_alerts, "trend_pct": None},
     ]
     if category == "energy":
-        cards[0] = {"label": "Cost/hr", "unit": "AED", "value": live.energy.cost_per_hour, "trend_pct": 0}
+        cards[0] = {"label": "Cost/hr", "unit": "AED", "value": live.energy.cost_per_hour, "trend_pct": None}
     return cards
 
 
-def _live_charts(live, building_id: str) -> Dict[str, Any]:
-    metrics = live_data_service.get_building_metrics(building_id, "24h")
-    energy_kwh = []
+def _live_charts(live, building_id: str, user: Optional[UserContext] = None) -> Dict[str, Any]:
+    metrics = live_data_service.get_building_metrics(building_id, "24h", user=user)
+    energy_kwh: List[Dict[str, Any]] = []
     if metrics and metrics.metrics:
         for point in metrics.metrics[:24]:
+            if point.metric != "total_kw":
+                continue
             energy_kwh.append(
                 {
+                    "timestamp": point.timestamp.isoformat(),
                     "hour": point.timestamp.hour if hasattr(point.timestamp, "hour") else 0,
                     "actual": round(point.value, 1),
-                    "predicted": round(point.value * 1.02, 1),
+                    # Do not fabricate a predicted series. Forecast is supplied separately
+                    # by the history-based forecasting service when enough history exists.
+                    "predicted": None,
                 }
             )
     if not energy_kwh:
-        hour = datetime.now(timezone.utc).hour
-        energy_kwh = [
-            {"hour": h, "actual": round(live.energy.total_kw * 0.9, 0), "predicted": round(live.energy.total_kw, 0)}
-            for h in range(max(0, hour - 12), hour + 1)
-        ]
+        energy_kwh = [{"timestamp": live.timestamp.isoformat(), "hour": live.timestamp.hour, "actual": round(live.energy.total_kw, 1), "predicted": None}]
     return {
         "energy_kwh": energy_kwh,
-        "optimization_score": [{"hour": i, "score": 85} for i in range(0, 24, 2)],
+        "optimization_score": [],
+        "prediction_available": False,
     }
 
 
 def _live_recommendations(live, category: str) -> List[Dict[str, Any]]:
-    recs = []
+    """Transparent rule-based operational observations.
+
+    No monetary saving is invented here. Verified/potential savings come from the
+    dedicated savings/M&V service, not this generic module composer.
+    """
+    recs: List[Dict[str, Any]] = []
     if live.hvac.cop < 3.5:
-        recs.append({"priority": "HIGH", "title": "Chiller COP below target", "savings_aed_per_month": 240, "category": category})
+        recs.append({
+            "priority": "HIGH",
+            "title": "Chiller COP below target",
+            "estimated_savings_aed_per_month": None,
+            "category": category,
+            "method": "rule_based_observation",
+            "evidence": {"cop": live.hvac.cop, "threshold": 3.5},
+        })
     if live.environment.co2_ppm > 800:
-        recs.append({"priority": "MED", "title": "Increase ventilation — CO₂ elevated", "savings_aed_per_month": 45, "category": category})
+        recs.append({
+            "priority": "MED",
+            "title": "Ventilation review recommended — CO₂ elevated",
+            "estimated_savings_aed_per_month": None,
+            "category": category,
+            "method": "rule_based_observation",
+            "evidence": {"co2_ppm": live.environment.co2_ppm, "threshold": 800},
+        })
     if not recs:
-        recs.append({"priority": "LOW", "title": "System operating within normal range", "savings_aed_per_month": 0, "category": category})
+        recs.append({
+            "priority": "LOW",
+            "title": "No rule-based exception detected in current snapshot",
+            "estimated_savings_aed_per_month": None,
+            "category": category,
+            "method": "rule_based_observation",
+            "evidence": {},
+        })
     return recs
 
 
@@ -249,7 +312,13 @@ def _recommendations(rng: random.Random, category: str) -> List[Dict[str, Any]]:
     ]
     rng.shuffle(pool)
     return [
-        {"priority": p, "title": t, "savings_aed_per_month": s, "category": category}
+        {
+            "priority": p,
+            "title": t,
+            "savings_aed_per_month": s,
+            "category": category,
+            "method": "demo_simulation",
+        }
         for p, t, s in pool[:3]
     ]
 
@@ -273,4 +342,5 @@ def _charts(rng: random.Random, category: str) -> Dict[str, Any]:
     return {
         "energy_kwh": [{"hour": h, "actual": _rng_val(rng, 40, 90, 0), "predicted": _rng_val(rng, 42, 88, 0)} for h in hours],
         "optimization_score": [{"hour": h, "score": _rng_val(rng, 70, 95, 0)} for h in hours[::2]],
+        "simulation": True,
     }

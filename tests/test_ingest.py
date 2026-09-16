@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import app
 
 
@@ -12,7 +13,7 @@ def test_ingest_status():
     assert "demo_mode" in r.json()
 
 
-def test_ingest_live_without_key_when_no_key_configured():
+def test_ingest_live_respects_configured_auth():
     payload = {
         "building_id": "burj-khalifa-01",
         "timestamp": "2026-06-28T12:00:00Z",
@@ -40,7 +41,9 @@ def test_ingest_live_without_key_when_no_key_configured():
         "active_alerts": 1,
         "demo_mode": False,
     }
-    r = client.post("/api/v1/ingest/live", json=payload)
+    settings = get_settings()
+    headers = {"X-API-Key": settings.ingest_api_key} if settings.ingest_api_key else {}
+    r = client.post("/api/v1/ingest/live", json=payload, headers=headers)
     assert r.status_code == 200
     assert r.json()["demo_mode"] is False
 

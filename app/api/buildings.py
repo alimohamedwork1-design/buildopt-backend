@@ -42,17 +42,35 @@ from app.utils.arabic_utils import bilingual_error, bilingual_success
 router = APIRouter(prefix="/buildings", tags=["buildings"])
 
 
+def _optional_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _row_to_summary(row: Dict[str, Any]) -> BuildingSummary:
     loc_parts = [p for p in [row.get("address"), row.get("city"), row.get("country")] if p]
     return BuildingSummary(
         id=str(row["id"]),
         name=row["name"],
         location=", ".join(loc_parts) if loc_parts else row.get("city") or "—",
-        floors=int(row.get("floors") or 0),
-        area_sqm=float(row.get("total_area_sqm") or 0),
+        floors=_optional_int(row.get("floors")),
+        area_sqm=_optional_float(row.get("total_area_sqm")),
         status="online" if row.get("connection_status") == "connected" else "offline",
-        energy_savings_pct=0.0,
-        active_alerts=0,
+        energy_savings_pct=_optional_float(row.get("verified_energy_savings_pct")),
+        active_alerts=_optional_int(row.get("active_alerts")),
         site_profile=row.get("site_profile") or "building_only",
     )
 
@@ -92,7 +110,7 @@ async def get_building(building_id: str, user: UserContext = Depends(get_optiona
         return BuildingDetail(
             **summary.model_dump(),
             bms_type=row.get("bms_vendor") or "—",
-            installed_capacity_kw=0.0,
+            installed_capacity_kw=_optional_float(row.get("installed_capacity_kw")),
             last_updated=datetime.now(timezone.utc),
         )
     building = live_data_service.get_building(building_id)

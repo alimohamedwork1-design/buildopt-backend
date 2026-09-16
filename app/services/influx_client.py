@@ -8,6 +8,7 @@ logger = logging.getLogger("buildopt.influx")
 
 ALLOWED_AGGREGATE_WINDOWS = frozenset({"1m", "5m", "15m", "30m", "1h", "2h"})
 MAX_HISTORY_HOURS = 168
+MAX_FORECAST_HISTORY_HOURS = 1440
 MAX_HISTORY_POINTS = 2000
 
 
@@ -21,6 +22,10 @@ def _flux_safe_tag(value: str) -> str:
 
 def _clamp_hours(hours: int) -> int:
     return max(1, min(int(hours), MAX_HISTORY_HOURS))
+
+
+def _clamp_forecast_hours(hours: int) -> int:
+    return max(1, min(int(hours), MAX_FORECAST_HISTORY_HOURS))
 
 
 def _normalize_every(every: str) -> str:
@@ -134,11 +139,14 @@ class InfluxService:
             return []
 
         try:
+            safe_building = _flux_safe_tag(building_id)
+            hours = _clamp_hours(hours)
             start = f"-{hours}h"
             flux = f'''
             from(bucket: "{self.bucket}")
               |> range(start: {start})
-              |> filter(fn: (r) => r["building_id"] == "{building_id}")
+              |> filter(fn: (r) => r["building_id"] == "{safe_building}")
+              |> filter(fn: (r) => r["_field"] == "value")
               |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
             '''
             tables = self._client.query_api().query(flux, org=self.org)
@@ -149,26 +157,28 @@ class InfluxService:
                         {
                             "timestamp": record.get_time(),
                             "value": float(record.get_value()),
-                            "metric": record.get_field(),
+                            # Measurements such as total_kw/hvac_kw are written with the
+                            # generic field name `value`; measurement is the metric identity.
+                            "metric": record.get_measurement(),
                         }
                     )
-            return results
+            return sorted(results, key=lambda r: r["timestamp"])
+        except ValueError as exc:
+            logger.warning("InfluxDB query_metrics invalid input: %s", exc)
+            return []
         except Exception as exc:
             logger.warning("InfluxDB query_metrics failed: %s", exc)
             return []
 
     def write_health_point(self, response_ms: float, status: str = "healthy") -> bool:
-        return self.write_point(
-            "api_health",
-            response_ms,
-            tags={"status": status},
-        )
+        return self.write_point("api_health", response_ms, tags={"status": status})
 
     def query_health_history(self, hours: int = 24) -> List[Dict[str, Any]]:
         if self.demo_mode or self._client is None:
             return []
 
         try:
+            hours = _clamp_hours(hours)
             start = f"-{hours}h"
             flux = f'''
             from(bucket: "{self.bucket}")
@@ -184,13 +194,11 @@ class InfluxService:
                     if ts and ts.tzinfo is None:
                         ts = ts.replace(tzinfo=timezone.utc)
                     status_tag = record.values.get("status", "healthy")
-                    results.append(
-                        {
-                            "timestamp": ts.isoformat().replace("+00:00", "Z") if ts else "",
-                            "response_ms": int(float(record.get_value())),
-                            "status": status_tag,
-                        }
-                    )
+                    results.append({
+                        "timestamp": ts.isoformat().replace("+00:00", "Z") if ts else "",
+                        "response_ms": int(float(record.get_value())),
+                        "status": status_tag,
+                    })
             return results
         except Exception as exc:
             logger.warning("InfluxDB query_health_history failed: %s", exc)
@@ -288,14 +296,12 @@ class InfluxService:
                     ts = record.get_time()
                     if ts and ts.tzinfo is None:
                         ts = ts.replace(tzinfo=timezone.utc)
-                    results.append(
-                        {
-                            "timestamp": ts.isoformat().replace("+00:00", "Z") if ts else "",
-                            "value": float(record.get_value()),
-                            "point_id": record.values.get("point_id", ""),
-                            "source_point_id": record.values.get("source_point_id", ""),
-                        }
-                    )
+                    results.append({
+                        "timestamp": ts.isoformat().replace("+00:00", "Z") if ts else "",
+                        "value": float(record.get_value()),
+                        "point_id": record.values.get("point_id", ""),
+                        "source_point_id": record.values.get("source_point_id", ""),
+                    })
             return sorted(results, key=lambda r: r["timestamp"])
         except ValueError as exc:
             logger.warning("InfluxDB query_building_telemetry_history invalid input: %s", exc)
@@ -305,16 +311,18 @@ class InfluxService:
             return []
 
     def query_hourly_kw(self, building_id: str, hours: int = 24) -> List[Dict[str, Any]]:
-        """Return hourly average total_kw for forecast/savings derivation."""
+        """Return hourly average total_kw/hvac_kw for forecast and M&V derivation."""
         if self.demo_mode or self._client is None:
             return []
 
         try:
+            safe_building = _flux_safe_tag(building_id)
+            hours = _clamp_forecast_hours(hours)
             start = f"-{hours}h"
             flux = f'''
             from(bucket: "{self.bucket}")
               |> range(start: {start})
-              |> filter(fn: (r) => r["building_id"] == "{building_id}")
+              |> filter(fn: (r) => r["building_id"] == "{safe_building}")
               |> filter(fn: (r) => r["_field"] == "value")
               |> filter(fn: (r) => r["_measurement"] == "total_kw" or r["_measurement"] == "hvac_kw")
               |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
@@ -326,14 +334,15 @@ class InfluxService:
                     ts = record.get_time()
                     if ts and ts.tzinfo is None:
                         ts = ts.replace(tzinfo=timezone.utc)
-                    results.append(
-                        {
-                            "timestamp": ts,
-                            "value": float(record.get_value()),
-                            "metric": record.get_measurement(),
-                        }
-                    )
+                    results.append({
+                        "timestamp": ts,
+                        "value": float(record.get_value()),
+                        "metric": record.get_measurement(),
+                    })
             return sorted(results, key=lambda r: r["timestamp"])
+        except ValueError as exc:
+            logger.warning("InfluxDB query_hourly_kw invalid input: %s", exc)
+            return []
         except Exception as exc:
             logger.warning("InfluxDB query_hourly_kw failed: %s", exc)
             return []
@@ -343,29 +352,42 @@ class InfluxService:
             return None
 
         try:
+            safe_building = _flux_safe_tag(building_id)
             flux = f'''
             from(bucket: "{self.bucket}")
               |> range(start: -15m)
-              |> filter(fn: (r) => r["building_id"] == "{building_id}")
+              |> filter(fn: (r) => r["building_id"] == "{safe_building}")
+              |> filter(fn: (r) => r["_field"] == "value")
               |> last()
             '''
             tables = self._client.query_api().query(flux, org=self.org)
-            fields: Dict[str, float] = {}
+            measurements: Dict[str, float] = {}
             ts = datetime.now(timezone.utc)
             for table in tables:
                 for record in table.records:
-                    fields[record.get_field()] = float(record.get_value())
+                    measurement = str(record.get_measurement() or "")
+                    if measurement:
+                        measurements[measurement] = float(record.get_value())
                     ts = record.get_time() or ts
 
-            if not fields:
+            required = {
+                "total_kw",
+                "hvac_kw",
+                "lighting_kw",
+                "other_kw",
+                "supply_air_temp",
+                "return_air_temp",
+                "temp_c",
+                "humidity_pct",
+                "co2_ppm",
+                "pm25",
+                "cop",
+            }
+            if not required.issubset(measurements):
                 return None
 
-            hvac_kw = fields.get("hvac_kw", 195.0)
-            total_kw = fields.get("total_kw", hvac_kw * 4.0)
-            supply = fields.get("supply_air_temp", 14.0)
-            temp_c = fields.get("temp_c", 23.0)
-            cop = fields.get("cop", 3.8)
-            co2 = int(fields.get("co2_ppm", 600))
+            total_kw = measurements["total_kw"]
+            hvac_kw = measurements["hvac_kw"]
             hour = datetime.now(timezone.utc).hour
             tariff = 0.38 if 12 <= hour < 24 else 0.23
 
@@ -373,29 +395,33 @@ class InfluxService:
                 building_id=building_id,
                 timestamp=ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc),
                 hvac=HVACData(
-                    supply_air_temp=supply,
-                    return_air_temp=supply + 10,
-                    delta_t=10.0,
+                    supply_air_temp=measurements["supply_air_temp"],
+                    return_air_temp=measurements["return_air_temp"],
+                    delta_t=round(measurements["return_air_temp"] - measurements["supply_air_temp"], 2),
                     power_kw=hvac_kw,
-                    cop=cop,
+                    cop=measurements["cop"],
                 ),
                 energy=EnergyData(
                     total_kw=total_kw,
                     hvac_kw=hvac_kw,
-                    lighting_kw=round(total_kw * 0.15, 1),
-                    other_kw=round(total_kw * 0.55, 1),
+                    lighting_kw=measurements["lighting_kw"],
+                    other_kw=measurements["other_kw"],
                     tariff_rate=tariff,
-                    cost_per_hour=round(total_kw * tariff, 1),
+                    cost_per_hour=round(total_kw * tariff, 2),
                 ),
                 environment=EnvironmentData(
-                    temp_c=temp_c,
-                    humidity_pct=48.0,
-                    co2_ppm=co2,
-                    pm25=20.0,
+                    temp_c=measurements["temp_c"],
+                    humidity_pct=measurements["humidity_pct"],
+                    co2_ppm=int(measurements["co2_ppm"]),
+                    pm25=measurements["pm25"],
                 ),
                 active_alerts=0,
                 demo_mode=False,
+                source="influx",
             )
+        except ValueError as exc:
+            logger.warning("InfluxDB get_latest_snapshot invalid input: %s", exc)
+            return None
         except Exception as exc:
             logger.warning("InfluxDB get_latest_snapshot failed: %s", exc)
             return None
