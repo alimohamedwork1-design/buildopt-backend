@@ -5,9 +5,10 @@ was loaded. The implementation now delegates to the validated site-history forec
 must not be presented as an LSTM in product/UI copy.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from app.ml.history_forecaster import HistoryForecaster
+from app.models.user_context import UserContext
 from app.services import demo_mode
 
 
@@ -18,7 +19,12 @@ class LSTMPredictor:
         self.demo_mode = demo_mode
         self._forecaster = HistoryForecaster()
 
-    def forecast(self, building_id: str, horizon_hours: int = 24) -> Dict[str, Any]:
+    def forecast(
+        self,
+        building_id: str,
+        horizon_hours: int = 24,
+        user: Optional[UserContext] = None,
+    ) -> Dict[str, Any]:
         if self.demo_mode:
             payload = demo_mode.get_energy_forecast(building_id, horizon_hours).model_dump(mode="json")
             payload.update({
@@ -27,4 +33,4 @@ class LSTMPredictor:
                 "model_version": "demo",
             })
             return payload
-        return self._forecaster.forecast(building_id, horizon_hours)
+        return self._forecaster.forecast(building_id, horizon_hours, user=user)
