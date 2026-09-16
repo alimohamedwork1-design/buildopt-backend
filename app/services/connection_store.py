@@ -23,6 +23,7 @@ class MetasysCredentials:
     version: str = "v4"
     status: str = "disconnected"
     last_connected_at: Optional[datetime] = None
+    saved_in_demo: bool = False
 
 
 def _fernet(secret: str) -> Fernet:
@@ -47,15 +48,19 @@ class ConnectionStore:
         self._metasys: Optional[MetasysCredentials] = None
 
     def get_metasys(self) -> MetasysCredentials:
-        if self._metasys:
-            return self._metasys
         settings = get_settings()
+        # Runtime connector state created while the process was in Demo mode must
+        # never become a Live connector merely because the settings context changes.
+        # Likewise, a live runtime connector is not exposed as demo state.
+        if self._metasys and self._metasys.saved_in_demo == settings.demo_mode:
+            return self._metasys
         return MetasysCredentials(
             host=settings.jci_metasys_host,
             username=settings.jci_metasys_username,
             password=settings.jci_metasys_password,
             version=settings.jci_metasys_version,
             status="connected" if settings.jci_metasys_host else "disconnected",
+            saved_in_demo=settings.demo_mode,
         )
 
     def has_saved_metasys(self) -> bool:
@@ -71,6 +76,7 @@ class ConnectionStore:
         *,
         status: str = "connected",
     ) -> MetasysCredentials:
+        settings = get_settings()
         now = datetime.now(timezone.utc)
         self._metasys = MetasysCredentials(
             host=host.rstrip("/"),
@@ -79,8 +85,13 @@ class ConnectionStore:
             version=version,
             status=status,
             last_connected_at=now,
+            saved_in_demo=settings.demo_mode,
         )
         return self._metasys
+
+    def clear_runtime(self) -> None:
+        """Drop only in-process credentials; deployment/Supabase configuration is untouched."""
+        self._metasys = None
 
     async def save_metasys(
         self,
@@ -93,24 +104,37 @@ class ConnectionStore:
         creds = self.update_metasys(host, username, password, version, status="connected")
         encrypted = _encrypt_password(password, settings.secret_key)
 
-        saved_remote = await self._persist_supabase(
-            protocol="metasys",
-            host=creds.host,
-            username=username,
-            password_encrypted=encrypted,
-            version=version,
-        )
+        # Demo credentials are intentionally memory-only. They must never pollute
+        # the persistent live connection table.
+        saved_remote = False
+        if not settings.demo_mode:
+            saved_remote = await self._persist_supabase(
+                protocol="metasys",
+                host=creds.host,
+                username=username,
+                password_encrypted=encrypted,
+                version=version,
+            )
 
         logger.info(
-            "Metasys credentials saved for %s (supabase=%s)",
-            creds.host,
-            "yes" if saved_remote else "memory-only",
+            "Metasys credentials saved for runtime mode=%s (supabase=%s)",
+            "demo" if settings.demo_mode else "live",
+            "yes" if saved_remote else "no",
         )
         return {
             "status": "saved",
-            "message": "Metasys credentials saved. Live data will begin within 30 seconds.",
-            "message_ar": "تم حفظ بيانات Metasys. ستبدأ البيانات الحية خلال 30 ثانية.",
+            "message": (
+                "Demo Metasys credentials stored in memory only."
+                if settings.demo_mode
+                else "Metasys credentials saved. Live data will begin after connection validation."
+            ),
+            "message_ar": (
+                "تم حفظ بيانات Metasys التجريبية في الذاكرة فقط."
+                if settings.demo_mode
+                else "تم حفظ بيانات Metasys. ستبدأ البيانات الحية بعد التحقق من الاتصال."
+            ),
             "supabase_persisted": saved_remote,
+            "demo_mode": settings.demo_mode,
         }
 
     async def _persist_supabase(
@@ -123,6 +147,8 @@ class ConnectionStore:
         version: str,
     ) -> bool:
         settings = get_settings()
+        if settings.demo_mode:
+            return False
         if not settings.supabase_url:
             return False
 
@@ -168,6 +194,8 @@ class ConnectionStore:
 
     async def load_metasys_from_supabase(self) -> None:
         settings = get_settings()
+        if settings.demo_mode:
+            return
         auth_key = settings.supabase_service_key or settings.supabase_key
         if not settings.supabase_url or not auth_key:
             return
