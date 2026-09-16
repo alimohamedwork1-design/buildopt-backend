@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     supabase_alert_webhook_url: str = Field(default="", alias="SUPABASE_ALERT_WEBHOOK_URL")
     alert_webhook_secret: str = Field(default="", alias="ALERT_WEBHOOK_SECRET")
 
+    notification_email_webhook_url: str = Field(default="", alias="NOTIFICATION_EMAIL_WEBHOOK_URL")
+    notification_teams_webhook_url: str = Field(default="", alias="NOTIFICATION_TEAMS_WEBHOOK_URL")
+    notification_slack_webhook_url: str = Field(default="", alias="NOTIFICATION_SLACK_WEBHOOK_URL")
+    notification_whatsapp_webhook_url: str = Field(default="", alias="NOTIFICATION_WHATSAPP_WEBHOOK_URL")
+
     jci_metasys_host: str = Field(default="", alias="JCI_METASYS_HOST")
     jci_metasys_username: str = Field(default="", alias="JCI_METASYS_USERNAME")
     jci_metasys_password: str = Field(default="", alias="JCI_METASYS_PASSWORD")
