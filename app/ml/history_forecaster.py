@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import math
 from datetime import timedelta
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error
 
+from app.models.user_context import UserContext
 from app.services import live_data_service
 
 MIN_OBSERVATIONS = 48
@@ -40,9 +41,18 @@ class HistoryForecaster:
     model_name = "gradient_boosting_autoregressive"
     model_version = "1.0.0-pilot"
 
-    def forecast(self, building_id: str, horizon_hours: int = 24) -> Dict[str, Any]:
+    def forecast(
+        self,
+        building_id: str,
+        horizon_hours: int = 24,
+        user: Optional[UserContext] = None,
+    ) -> Dict[str, Any]:
         horizon = max(1, min(int(horizon_hours), MAX_HORIZON_HOURS))
-        metrics = live_data_service.get_building_metrics(building_id, "7d")
+        # Forecasting is a live-data operation. If called internally without a user,
+        # force an anonymous LIVE context so a global DEMO_MODE cannot leak simulated
+        # history into a live forecast path.
+        history_user = user or UserContext.anonymous_live()
+        metrics = live_data_service.get_building_metrics(building_id, "7d", user=history_user)
         if metrics is None:
             return self._unavailable(building_id, horizon, "NO_HISTORY", 0)
 
@@ -89,7 +99,6 @@ class HistoryForecaster:
         coverage = min(1.0, len(points) / TARGET_HISTORY_HOURS)
         confidence = max(0.25, min(0.97, (1.0 - normalized_mae) * (0.65 + 0.35 * coverage)))
 
-        # Refit on all available supervised rows before recursive inference.
         model.fit(x, y)
         generated_values = list(values)
         ts = timestamps[-1]
