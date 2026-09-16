@@ -6,6 +6,7 @@ from app.config import get_settings
 from app.data.modules_registry import list_modules
 from app.deps.auth import UserContext, get_optional_user
 from app.deps.guards import assert_building_access, empty_no_building
+from app.services.notification_service import channel_status
 from app.services.pilot_os_service import build_pilot_summary, model_registry
 from app.utils.arabic_utils import bilingual_error
 
@@ -26,6 +27,22 @@ def _resolve_pilot_building(user: UserContext, requested: str | None) -> str:
             raise HTTPException(status_code=404, detail=empty_no_building())
         return user.building_ids[0]
     return "burj-khalifa-01"
+
+
+def _attach_notification_status(summary: dict) -> dict:
+    notifications = channel_status()
+    notifications["state"] = "CONFIGURED" if notifications["configured_channels"] else "NOT_CONFIGURED"
+    notifications["note"] = (
+        "Configured providers are ready for alert delivery. Test delivery is admin-only."
+        if notifications["configured_channels"]
+        else "No notification provider is claimed until deployment credentials are configured."
+    )
+    summary["notifications"] = notifications
+    return summary
+
+
+async def _summary(user: UserContext, building_id: str) -> dict:
+    return _attach_notification_status(await build_pilot_summary(user, building_id))
 
 
 @router.get("/metadata")
@@ -52,6 +69,7 @@ async def site_metadata() -> dict:
             "fdd_lifecycle": True,
             "recommendation_approval": True,
             "measurement_verification": True,
+            "notification_gateway": True,
             "shadow_optimization": True,
             "automatic_writeback": False,
             "bms_protocols": ["Metasys REST", "BACnet/IP", "Modbus TCP", "MQTT"],
@@ -84,7 +102,7 @@ async def pilot_summary(
     user: UserContext = Depends(get_optional_user),
 ) -> dict:
     resolved = _resolve_pilot_building(user, building_id)
-    return await build_pilot_summary(user, resolved)
+    return await _summary(user, resolved)
 
 
 @router.get("/pilot/readiness")
@@ -93,7 +111,7 @@ async def pilot_readiness(
     user: UserContext = Depends(get_optional_user),
 ) -> dict:
     resolved = _resolve_pilot_building(user, building_id)
-    summary = await build_pilot_summary(user, resolved)
+    summary = await _summary(user, resolved)
     return {
         "building_id": resolved,
         "state": summary["state"],
@@ -110,12 +128,13 @@ async def pilot_operations(
     user: UserContext = Depends(get_optional_user),
 ) -> dict:
     resolved = _resolve_pilot_building(user, building_id)
-    summary = await build_pilot_summary(user, resolved)
+    summary = await _summary(user, resolved)
     return {
         "building_id": resolved,
         "state": summary["state"],
         "readiness_score": summary["readiness_score"],
         **summary["operations"],
+        "notifications": summary["notifications"],
         "safety": summary["safety"],
         "generated_at": summary["generated_at"],
     }
@@ -127,7 +146,7 @@ async def pilot_connections(
     user: UserContext = Depends(get_optional_user),
 ) -> dict:
     resolved = _resolve_pilot_building(user, building_id)
-    summary = await build_pilot_summary(user, resolved)
+    summary = await _summary(user, resolved)
     return summary["connections"]
 
 
@@ -137,7 +156,7 @@ async def pilot_rule_packs(
     user: UserContext = Depends(get_optional_user),
 ) -> dict:
     resolved = _resolve_pilot_building(user, building_id)
-    summary = await build_pilot_summary(user, resolved)
+    summary = await _summary(user, resolved)
     return {
         "building_id": resolved,
         "rule_packs": summary["rule_packs"],
