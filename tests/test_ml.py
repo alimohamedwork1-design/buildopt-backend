@@ -17,7 +17,21 @@ def test_fault_detector_cop():
     assert any(f["rule_id"] == "FDD-007" for f in faults)
 
 
-def test_mpc_optimizer():
-    optimizer = MPCOptimizer(demo_mode=True)
-    recs = optimizer.optimize("burj-khalifa-01", {"min_cop": 3.2})
-    assert len(recs) >= 2
+def test_optimizer_is_shadow_only_and_does_not_invent_savings():
+    optimizer = MPCOptimizer(demo_mode=False)
+    recs = optimizer.optimize(
+        "building-01",
+        {"min_cop": 3.2, "current_cop": 2.8, "current_supply_temp": 14.0},
+    )
+    assert len(recs) >= 1
+    assert all(r["candidate_only"] is True for r in recs)
+    assert all(r["writeback_allowed"] is False for r in recs)
+    assert all(r["engine_mode"] == "bounded_rule_advisor_shadow_only" for r in recs)
+
+
+def test_optimizer_refuses_to_fake_candidate_without_state():
+    optimizer = MPCOptimizer(demo_mode=False)
+    recs = optimizer.optimize("building-01", {"min_cop": 3.2})
+    assert len(recs) == 1
+    assert recs[0]["action"] == "collect_operating_state"
+    assert recs[0]["writeback_allowed"] is False
