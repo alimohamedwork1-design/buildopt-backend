@@ -41,7 +41,7 @@ MODULE_CATEGORIES: Dict[str, List[str]] = {
     "investor": ["investor", "investor-report", "valuation-impact", "exit-readiness", "how-it-works", "journey"],
     "compliance": ["compliance", "regulatory-monitor", "eu-compliance", "us-compliance", "leed-scorer"],
     "wellness": ["wellness", "wellness-os", "iaq", "air-quality-index", "thermal-comfort", "health-certificate"],
-    "infrastructure": ["water", "vertical-transport", "backup-power", "sensor-mesh", "bim-integration"],
+    "infrastructure": ["water", "vertical-transport", "backup-power", "sensor-mesh", "bim-integration", "edge-fleet"],
 }
 
 ROUTE_TO_CATEGORY: Dict[str, str] = {}
@@ -95,6 +95,7 @@ PILOT_MODULES = frozenset({
     "industrial-refrigeration",
     "integration",
     "commissioning",
+    "edge-fleet",
     "roi",
     "openblue-bridge",
     "metasys-deep-link",
@@ -139,6 +140,7 @@ CONCEPT_MODULES = frozenset({
 
 CORE_PILOT_MODULES = frozenset({
     "overview",
+    "commissioning",
     "portfolio",
     "telemetry",
     "data-health",
@@ -150,6 +152,7 @@ CORE_PILOT_MODULES = frozenset({
     "optimization",
     "reports",
     "integration",
+    "edge-fleet",
     "system-status",
     "settings",
 })
@@ -173,6 +176,12 @@ def get_module_capability(route: str) -> Dict[str, Any]:
             truth = "Evidence/tool assistant over live BuildOpt services; not a standalone calibrated LLM."
         elif slug == "portfolio":
             truth = "Uses the real building registry; portfolio KPIs are shown only when source fields exist."
+        elif slug == "commissioning":
+            truth = "Pilot OS composes real connection, mapping, health, FDD, workflow and M&V readiness evidence."
+        elif slug == "edge-fleet":
+            truth = "Uses real edge heartbeat state; OTA/model push is not claimed until implemented."
+        elif slug == "setpoint-writeback":
+            truth = "Writeback status/control surface only; automatic control remains disabled and human approval is required."
         else:
             truth = "Real services/data are composed, but site-specific pilot validation is required."
     elif slug in HEURISTIC_MODULES:
