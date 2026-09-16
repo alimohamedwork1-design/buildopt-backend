@@ -42,17 +42,39 @@ from app.utils.arabic_utils import bilingual_error, bilingual_success
 router = APIRouter(prefix="/buildings", tags=["buildings"])
 
 
+def _optional_int(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> Optional[float]:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _row_to_summary(row: Dict[str, Any]) -> BuildingSummary:
     loc_parts = [p for p in [row.get("address"), row.get("city"), row.get("country")] if p]
+    verified_savings = _optional_float(row.get("verified_energy_savings_pct"))
+    alert_count = _optional_int(row.get("active_alerts"))
     return BuildingSummary(
         id=str(row["id"]),
         name=row["name"],
         location=", ".join(loc_parts) if loc_parts else row.get("city") or "—",
-        floors=int(row.get("floors") or 0),
-        area_sqm=float(row.get("total_area_sqm") or 0),
+        floors=_optional_int(row.get("floors")),
+        area_sqm=_optional_float(row.get("total_area_sqm")),
         status="online" if row.get("connection_status") == "connected" else "offline",
-        energy_savings_pct=0.0,
-        active_alerts=0,
+        # Unknown is NULL. Only an explicitly persisted/verified portfolio value may
+        # populate this field; the list endpoint never invents a zero-savings claim.
+        energy_savings_pct=verified_savings,
+        active_alerts=alert_count,
         site_profile=row.get("site_profile") or "building_only",
     )
 
@@ -92,7 +114,7 @@ async def get_building(building_id: str, user: UserContext = Depends(get_optiona
         return BuildingDetail(
             **summary.model_dump(),
             bms_type=row.get("bms_vendor") or "—",
-            installed_capacity_kw=0.0,
+            installed_capacity_kw=_optional_float(row.get("installed_capacity_kw")),
             last_updated=datetime.now(timezone.utc),
         )
     building = live_data_service.get_building(building_id)
@@ -260,15 +282,17 @@ async def send_control(
 
 
 @router.get("/{building_id}/site-profile")
-async def get_building_site_profile(building_id: str, user: UserContext = Depends(get_optional_user)) -> dict:
+async def get_building_site_profile(
+    building_id: str,
+    user: UserContext = Depends(get_optional_user),
+) -> Dict[str, Any]:
     assert_building_access(user, building_id)
-    if get_building_config(building_id):
-        return {"building_id": building_id, "site_profile": get_site_profile(building_id)}
-    owner = None if user.is_admin else user.user_id
-    row = await get_building_row(building_id, owner_id=owner)
-    if not row:
-        raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
-    return {"building_id": building_id, "site_profile": row.get("site_profile") or "building_only"}
+    if user.is_live_account:
+        row = await get_building_row(building_id, user.user_id)
+        if not row:
+            raise HTTPException(status_code=404, detail=empty_no_building())
+        return {"building_id": building_id, "site_profile": row.get("site_profile") or "building_only"}
+    return {"building_id": building_id, "site_profile": get_site_profile(building_id)}
 
 
 @router.put("/{building_id}/site-profile")
@@ -276,111 +300,51 @@ async def update_building_site_profile(
     building_id: str,
     body: SiteProfileUpdate,
     user: UserContext = Depends(require_write_access),
-) -> dict:
+) -> Dict[str, Any]:
     assert_building_access(user, building_id)
-    try:
-        if get_building_config(building_id):
-            saved = set_site_profile(building_id, body.site_profile)
-        else:
-            owner = None if user.is_admin else user.user_id
-            row = await update_site_profile_row(building_id, body.site_profile, owner_id=owner)
-            if not row:
-                raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
-            saved = row.get("site_profile") or body.site_profile
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=bilingual_error(str(exc), str(exc))) from exc
-    return {"building_id": building_id, "site_profile": saved}
-
-
-def _serialize_telemetry_point(point: dict) -> dict:
-    current = point.get("current") or {}
-    return {
-        "id": point["id"],
-        "source": point["source"],
-        "source_point_id": point["source_point_id"],
-        "source_name": point.get("source_name"),
-        "raw_unit": point.get("raw_unit"),
-        "gateway_id": point["gateway_id"],
-        "connector_id": point["connector_id"],
-        "value": current.get("last_value") if current.get("last_value") is not None else current.get("last_value_text"),
-        "quality": current.get("normalized_quality"),
-        "source_quality": current.get("source_quality"),
-        "source_timestamp": current.get("last_source_timestamp"),
-        "edge_received_at": current.get("last_edge_received_at"),
-        "cloud_received_at": current.get("last_cloud_received_at"),
-        "freshness_seconds": current.get("freshness_seconds"),
-        "expected_interval_seconds": current.get("expected_interval_seconds"),
-        "freshness_state": current.get("freshness_state"),
-        "state": current.get("state"),
-    }
-
-
-@router.get("/{building_id}/telemetry/current")
-async def building_telemetry_current(
-    building_id: str,
-    user: UserContext = Depends(get_optional_user),
-) -> dict:
-    assert_building_access(user, building_id)
-    store = get_telemetry_store()
-    tenant_id = user.user_id if user.authenticated else None
-    points = store.list_building_current(building_id, tenant_id=tenant_id)
-    influx = get_influx_service()
-    return {
-        "building_id": building_id,
-        "points": [_serialize_telemetry_point(p) for p in points],
-        "total": len(points),
-        "influx": influx.infrastructure_state(),
-    }
+    if user.is_live_account:
+        ok = await update_site_profile_row(building_id, user.user_id or "", body.site_profile)
+        if not ok:
+            raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
+    else:
+        set_site_profile(building_id, body.site_profile)
+    return {"building_id": building_id, "site_profile": body.site_profile}
 
 
 @router.get("/{building_id}/telemetry/history")
-async def building_telemetry_history(
+async def get_building_telemetry_history(
     building_id: str,
     hours: int = Query(default=24, ge=1, le=168),
-    every: str = Query(default="15m"),
-    point_id: str | None = None,
-    limit: int = Query(default=500, ge=1, le=2000),
+    point_id: Optional[str] = Query(default=None),
     user: UserContext = Depends(get_optional_user),
-) -> dict:
+) -> Dict[str, Any]:
     assert_building_access(user, building_id)
     influx = get_influx_service()
-    state = influx.infrastructure_state()
-    if state.get("status") == "simulated" and not user.allows_demo_data():
-        return {
-            "building_id": building_id,
-            "point_id": point_id,
-            "hours": hours,
-            "series": [],
-            "total": 0,
-            "influx": state,
-            "available": False,
-            "state": "INFLUX_UNAVAILABLE",
-        }
-    if point_id:
-        store = get_telemetry_store()
-        point = store.get_point(point_id)
-        if not point or point["building_id"] != building_id:
-            raise HTTPException(status_code=404, detail=bilingual_error("Point not found", "النقطة غير موجودة"))
-        series = influx.query_telemetry_point_history(
-            point_id=point_id,
-            building_id=building_id,
-            hours=hours,
-            every=every,
-        )
-    else:
-        series = influx.query_building_telemetry_history(
-            building_id,
-            hours=hours,
-            every=every,
-            limit=limit,
-        )
+    point_ids = [point_id] if point_id else None
+    series = influx.query_building_telemetry_history(building_id, hours=hours, point_ids=point_ids)
     return {
         "building_id": building_id,
         "point_id": point_id,
         "hours": hours,
         "series": series,
         "total": len(series),
-        "influx": state,
-        "available": state.get("persistence", False) and len(series) > 0,
-        "state": "OK" if series else "NO_DATA",
+        "influx": influx.infrastructure_state(),
     }
+
+
+@router.get("/{building_id}/telemetry/current")
+async def get_building_telemetry_current(
+    building_id: str,
+    user: UserContext = Depends(get_optional_user),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
+    store = get_telemetry_store()
+    points = store.list_points(building_id=building_id)
+    current: List[Dict[str, Any]] = []
+    for point in points:
+        row = dict(point)
+        state = store.get_current_state(str(point.get("id") or ""))
+        if state:
+            row.update(state)
+        current.append(row)
+    return {"building_id": building_id, "points": current, "total": len(current)}
