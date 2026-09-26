@@ -120,6 +120,10 @@ class EnergyForecast(BaseModel):
     horizon_hours: int
     forecast: List[EnergyForecastPoint]
     demo_mode: bool
+    method: Optional[str] = None
+    model_version: Optional[str] = None
+    data_coverage_pct: Optional[float] = None
+    limitations: List[str] = Field(default_factory=list)
 
 
 class DewaTariffBreakdown(BaseModel):
@@ -146,6 +150,11 @@ class EnergySavings(BaseModel):
     savings_pct: float
     cost_saved_aed: float
     demo_mode: bool
+    verification_status: Optional[str] = None
+    methodology: Optional[str] = None
+    data_coverage_pct: Optional[float] = None
+    measurement_period_days: Optional[int] = None
+    verified: bool = False
 
 
 class EquipmentSummary(BaseModel):
