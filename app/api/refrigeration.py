@@ -1,9 +1,10 @@
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import get_settings
-from app.data.buildings_registry import get_building_config
+from app.deps.auth import UserContext, get_required_user
+from app.deps.guards import assert_building_access, require_bms_config_write
 from app.services.connection_store import connection_store
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.refrigeration_auto_mapper import (
@@ -23,27 +24,28 @@ from app.utils.arabic_utils import bilingual_error
 router = APIRouter(prefix="/refrigeration", tags=["refrigeration"])
 
 
-def _require_building(building_id: str) -> Dict[str, Any]:
-    cfg = get_building_config(building_id)
-    if not cfg:
-        raise HTTPException(status_code=404, detail=bilingual_error("Building not found", "المبنى غير موجود"))
-    return cfg
-
 
 @router.get("/logical-keys")
-async def list_logical_keys() -> Dict[str, Any]:
+async def list_logical_keys(user: UserContext = Depends(get_required_user)) -> Dict[str, Any]:
     return {"domain": "refrigeration", "logical_keys": REFRIGERATION_LOGICAL_KEYS}
 
 
 @router.get("/buildings/{building_id}/objects")
-async def get_building_objects(building_id: str) -> Dict[str, Any]:
-    _require_building(building_id)
+async def get_building_objects(
+    building_id: str,
+    user: UserContext = Depends(get_required_user),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     return {"building_id": building_id, "refrigeration_objects": get_refrigeration_objects(building_id)}
 
 
 @router.put("/buildings/{building_id}/objects")
-async def put_building_objects(building_id: str, body: Dict[str, str]) -> Dict[str, Any]:
-    _require_building(building_id)
+async def put_building_objects(
+    building_id: str,
+    body: Dict[str, str],
+    user: UserContext = Depends(require_bms_config_write),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     objects = body.get("refrigeration_objects") or body.get("objects") or body
     if not isinstance(objects, dict):
         raise HTTPException(status_code=400, detail="Expected object map")
@@ -52,8 +54,13 @@ async def put_building_objects(building_id: str, body: Dict[str, str]) -> Dict[s
 
 
 @router.post("/buildings/{building_id}/objects/auto-map")
-async def auto_map_building(building_id: str, merge: bool = True, force: bool = False) -> Dict[str, Any]:
-    _require_building(building_id)
+async def auto_map_building(
+    building_id: str,
+    merge: bool = True,
+    force: bool = False,
+    user: UserContext = Depends(require_bms_config_write),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     settings = get_settings()
     creds = connection_store.get_metasys()
     client = JCIMetasysClient(
@@ -79,22 +86,32 @@ async def auto_map_building(building_id: str, merge: bool = True, force: bool = 
 
 
 @router.get("/buildings/{building_id}/connection")
-async def get_connection(building_id: str) -> Dict[str, Any]:
-    _require_building(building_id)
+async def get_connection(
+    building_id: str,
+    user: UserContext = Depends(get_required_user),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     return {"building_id": building_id, **get_refrigeration_connection(building_id)}
 
 
 @router.put("/buildings/{building_id}/connection")
-async def put_connection(building_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    _require_building(building_id)
+async def put_connection(
+    building_id: str,
+    body: Dict[str, Any],
+    user: UserContext = Depends(require_bms_config_write),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     saved = set_refrigeration_connection(building_id, body)
     snapshot = await poll_building(building_id)
     return {"building_id": building_id, **saved, "snapshot": snapshot}
 
 
 @router.post("/buildings/{building_id}/test-connection")
-async def test_connection(building_id: str) -> Dict[str, Any]:
-    _require_building(building_id)
+async def test_connection(
+    building_id: str,
+    user: UserContext = Depends(require_bms_config_write),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     snapshot = await poll_building(building_id)
     conn = get_refrigeration_connection(building_id)
     ok = snapshot is not None and bool(snapshot.get("readings"))
@@ -108,36 +125,53 @@ async def test_connection(building_id: str) -> Dict[str, Any]:
 
 
 @router.get("/buildings/{building_id}/modbus-map")
-async def get_modbus(building_id: str) -> Dict[str, Any]:
-    _require_building(building_id)
+async def get_modbus(
+    building_id: str,
+    user: UserContext = Depends(get_required_user),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     return {"building_id": building_id, "modbus_map": get_modbus_map(building_id)}
 
 
 @router.put("/buildings/{building_id}/modbus-map")
-async def put_modbus(building_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    _require_building(building_id)
+async def put_modbus(
+    building_id: str,
+    body: Dict[str, Any],
+    user: UserContext = Depends(require_bms_config_write),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     mapping = body.get("modbus_map") or body
     saved = set_modbus_map(building_id, mapping)
     return {"building_id": building_id, "modbus_map": saved}
 
 
 @router.get("/buildings/{building_id}/bacnet-map")
-async def get_bacnet(building_id: str) -> Dict[str, Any]:
-    _require_building(building_id)
+async def get_bacnet(
+    building_id: str,
+    user: UserContext = Depends(get_required_user),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     return {"building_id": building_id, "bacnet_map": get_bacnet_map(building_id)}
 
 
 @router.put("/buildings/{building_id}/bacnet-map")
-async def put_bacnet(building_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    _require_building(building_id)
+async def put_bacnet(
+    building_id: str,
+    body: Dict[str, Any],
+    user: UserContext = Depends(require_bms_config_write),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     mapping = body.get("bacnet_map") or body
     saved = set_bacnet_map(building_id, mapping)
     return {"building_id": building_id, "bacnet_map": saved}
 
 
 @router.get("/snapshot/{building_id}")
-async def get_snapshot(building_id: str) -> Dict[str, Any]:
-    _require_building(building_id)
+async def get_snapshot(
+    building_id: str,
+    user: UserContext = Depends(get_required_user),
+) -> Dict[str, Any]:
+    assert_building_access(user, building_id)
     cached = get_cached_snapshot(building_id)
     if cached:
         return cached
