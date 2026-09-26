@@ -298,37 +298,73 @@ def get_energy_forecast(
     if allows_simulated_telemetry(user):
         return demo_mode.get_energy_forecast(building_id, horizon_hours)
 
+    # Live-mode forecast is deliberately transparent: an hour-of-day historical
+    # profile, not an "AI" claim. Return NO_DATA until a minimum history exists.
+    history_hours = max(168, horizon_hours * 2)
     influx = _influx(force_live=True)
-    history = influx.query_hourly_kw(building_id, hours=24)
+    history = influx.query_hourly_kw(building_id, hours=history_hours)
     if not history:
-        return EnergyForecast(
-            building_id=building_id,
-            horizon_hours=horizon_hours,
-            forecast=[],
-            demo_mode=False,
-        )
+        return None
 
-    values = [h["value"] for h in history if h.get("metric") == "total_kw"] or [h["value"] for h in history]
-    base_kw = sum(values) / max(len(values), 1)
+    rows = [h for h in history if h.get("value") is not None and h.get("metric") in (None, "total_kw")]
+    if len(rows) < 24:
+        return None
+
+    def _hour_of(row: Dict[str, Any]) -> Optional[int]:
+        ts = row.get("timestamp")
+        if isinstance(ts, datetime):
+            return ts.hour
+        if isinstance(ts, str):
+            try:
+                return datetime.fromisoformat(ts.replace("Z", "+00:00")).hour
+            except ValueError:
+                return None
+        return None
+
+    by_hour: Dict[int, List[float]] = {}
+    values: List[float] = []
+    for row in rows:
+        value = float(row["value"])
+        values.append(value)
+        hour = _hour_of(row)
+        if hour is not None:
+            by_hour.setdefault(hour, []).append(value)
+
+    if not values:
+        return None
+
+    global_mean = sum(values) / len(values)
+    coverage_pct = min(100.0, len(values) / max(history_hours, 1) * 100.0)
+    # Confidence reflects data coverage only; it is not model accuracy.
+    confidence = round(min(0.90, 0.35 + 0.55 * coverage_pct / 100.0), 2)
+
     now = datetime.now(timezone.utc)
     forecast_points: List[EnergyForecastPoint] = []
-    for hour in range(1, horizon_hours + 1):
-        ts = now + timedelta(hours=hour)
-        hour_factor = 1.15 if 12 <= ts.hour < 24 else 0.85
+    for step in range(1, horizon_hours + 1):
+        ts = now + timedelta(hours=step)
+        same_hour = by_hour.get(ts.hour) or []
+        predicted = sum(same_hour) / len(same_hour) if same_hour else global_mean
         forecast_points.append(
             EnergyForecastPoint(
                 timestamp=ts,
-                predicted_kw=round(base_kw * hour_factor, 1),
-                confidence=0.88,
+                predicted_kw=round(predicted, 1),
+                confidence=confidence,
             )
         )
+
     return EnergyForecast(
         building_id=building_id,
         horizon_hours=horizon_hours,
         forecast=forecast_points,
         demo_mode=False,
+        method="hour_of_day_historical_mean",
+        model_version="forecast_baseline_v1",
+        data_coverage_pct=round(coverage_pct, 1),
+        limitations=[
+            "Live baseline forecast; not an ML/LSTM validation claim.",
+            "Weather and occupancy normalization are not applied in this version.",
+        ],
     )
-
 
 def get_energy_savings(
     building_id: str = "burj-khalifa-01",
@@ -337,38 +373,61 @@ def get_energy_savings(
     if allows_simulated_telemetry(user):
         return demo_mode.get_energy_savings()
 
-    influx = _influx(force_live=True)
-    history = influx.query_hourly_kw(building_id, hours=720)
-    if history:
-        actual_kwh = sum(h["value"] for h in history)
-        baseline_kwh = actual_kwh * 1.2
-        savings_kwh = baseline_kwh - actual_kwh
-        savings_pct = round((savings_kwh / baseline_kwh) * 100, 1) if baseline_kwh else 0
-        return EnergySavings(
-            baseline_kwh=round(baseline_kwh, 0),
-            actual_kwh=round(actual_kwh, 0),
-            savings_kwh=round(savings_kwh, 0),
-            savings_pct=savings_pct,
-            cost_saved_aed=round(savings_kwh * 0.30, 2),
-            demo_mode=False,
+    # Never manufacture a live baseline (for example actual * 1.18/1.20).
+    # The generic savings endpoint reports VERIFIED M&V records only.
+    from app.services.savings_engine import SavingsState, list_opportunities
+
+    verified = [
+        opp
+        for opp in list_opportunities(building_id)
+        if opp.state == SavingsState.VERIFIED and opp.verified_saving_aed is not None
+    ]
+    if not verified:
+        return None
+
+    baseline_kwh = sum(float(opp.baseline_kwh or 0) for opp in verified)
+    actual_kwh = sum(
+        float(opp.actual_kwh if opp.actual_kwh is not None else (opp.after_energy_kwh or 0))
+        for opp in verified
+    )
+    savings_kwh = sum(
+        float(
+            opp.energy_saved_kwh
+            if opp.energy_saved_kwh is not None
+            else (opp.avoided_kwh or 0)
+        )
+        for opp in verified
+    )
+    cost_saved = sum(float(opp.verified_saving_aed or 0) for opp in verified)
+    savings_pct = round((savings_kwh / baseline_kwh) * 100, 1) if baseline_kwh else 0.0
+    coverage_values = [float(opp.data_coverage_pct or 0) for opp in verified]
+    coverage_pct = sum(coverage_values) / len(coverage_values) if coverage_values else 0.0
+
+    measurement_days: Optional[int] = None
+    dated = [
+        (opp.measurement_period_start, opp.measurement_period_end)
+        for opp in verified
+        if opp.measurement_period_start and opp.measurement_period_end
+    ]
+    if dated:
+        measurement_days = max(
+            0,
+            max((end - start).days for start, end in dated if end >= start),
         )
 
-    live = live_cache.get_live(building_id)
-    if live:
-        actual = live.energy.total_kw * 24 * 30
-        baseline = actual * 1.18
-        savings_kwh = baseline - actual
-        return EnergySavings(
-            baseline_kwh=round(baseline, 0),
-            actual_kwh=round(actual, 0),
-            savings_kwh=round(savings_kwh, 0),
-            savings_pct=round((savings_kwh / baseline) * 100, 1) if baseline else 0,
-            cost_saved_aed=round(savings_kwh * 0.30, 2),
-            demo_mode=False,
-        )
-
-    return None
-
+    return EnergySavings(
+        baseline_kwh=round(baseline_kwh, 2),
+        actual_kwh=round(actual_kwh, 2),
+        savings_kwh=round(savings_kwh, 2),
+        savings_pct=savings_pct,
+        cost_saved_aed=round(cost_saved, 2),
+        demo_mode=False,
+        verification_status="VERIFIED",
+        methodology="durable_m_and_v_records",
+        data_coverage_pct=round(coverage_pct, 1),
+        measurement_period_days=measurement_days,
+        verified=True,
+    )
 
 def get_dewa_tariff(
     building_id: str = "burj-khalifa-01",
