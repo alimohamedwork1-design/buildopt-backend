@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from typing import Optional
 
+from app.deps.auth import UserContext, get_required_user
 from app.models.schemas import PrayerTimes, RamadanMode, SandstormAlert
 from app.services.gcc_config import get_calendar, get_carbon_factor, get_tariff, list_tariffs
 from app.utils.gcc_features import (
@@ -29,7 +30,10 @@ async def sandstorm_alert() -> SandstormAlert:
 
 
 @router.post("/hvac-prayer-adjust")
-async def hvac_prayer_adjust(prayer: str) -> dict:
+async def hvac_prayer_adjust(
+    prayer: str,
+    user: UserContext = Depends(get_required_user),
+) -> dict:
     return await adjust_hvac_for_prayer(prayer)
 
 
