@@ -1,15 +1,19 @@
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import get_settings
+from app.deps.auth import UserContext, get_required_user
+from app.deps.guards import require_bms_config, require_write_access
 from app.models.schemas import JCICommand, JCIConnectionRequest
+from app.services.audit_log import record_audit
 from app.services.bms_auto_connect import run_bms_auto_connect
 from app.services.connection_store import connection_store
 from app.services.jci_metasys import JCIMetasysClient
 from app.services.log_handler import log_event
 from app.services.metasys_auto_mapper import LOGICAL_KEYS, flatten_metasys_objects, suggest_mappings
 from app.services.metasys_object_store import get_metasys_objects, list_all_mappings, set_metasys_objects
+from app.services.write_policy import DEFAULT_WRITE_MODE, validate_write_request
 from app.utils.arabic_utils import bilingual_error, bilingual_success
 
 router = APIRouter(prefix="/jci", tags=["jci"])
@@ -28,7 +32,10 @@ def _get_client() -> JCIMetasysClient:
 
 
 @router.post("/test-connection")
-async def test_connection(body: JCIConnectionRequest) -> Dict[str, Any]:
+async def test_connection(
+    body: JCIConnectionRequest,
+    user: UserContext = Depends(require_bms_config),
+) -> Dict[str, Any]:
     client = JCIMetasysClient(
         host=body.host,
         username=body.username,
@@ -47,7 +54,10 @@ async def test_connection(body: JCIConnectionRequest) -> Dict[str, Any]:
 
 
 @router.post("/save-credentials")
-async def save_credentials(body: JCIConnectionRequest) -> Dict[str, Any]:
+async def save_credentials(
+    body: JCIConnectionRequest,
+    user: UserContext = Depends(require_bms_config),
+) -> Dict[str, Any]:
     settings = get_settings()
     if not settings.demo_mode:
         client = JCIMetasysClient(
@@ -78,7 +88,10 @@ async def save_credentials(body: JCIConnectionRequest) -> Dict[str, Any]:
 
 
 @router.post("/network-diagnostic")
-async def network_diagnostic(body: JCIConnectionRequest) -> Dict[str, Any]:
+async def network_diagnostic(
+    body: JCIConnectionRequest,
+    user: UserContext = Depends(require_bms_config),
+) -> Dict[str, Any]:
     settings = get_settings()
     client = JCIMetasysClient(
         host=body.host,
@@ -100,7 +113,11 @@ async def list_logical_keys(domain: str = "hvac") -> Dict[str, Any]:
 
 
 @router.post("/auto-connect")
-async def auto_connect(merge: bool = True, force: bool = False) -> Dict[str, Any]:
+async def auto_connect(
+    merge: bool = True,
+    force: bool = False,
+    user: UserContext = Depends(require_bms_config),
+) -> Dict[str, Any]:
     """Discover Metasys objects, auto-map all buildings, poll live telemetry."""
     return await run_bms_auto_connect(merge=merge, force=force)
 
@@ -110,6 +127,7 @@ async def auto_map_building_objects(
     building_id: str,
     merge: bool = True,
     force: bool = False,
+    user: UserContext = Depends(require_bms_config),
 ) -> Dict[str, Any]:
     from app.data.buildings_registry import get_building_config
 
@@ -143,7 +161,10 @@ async def auto_map_building_objects(
 
 
 @router.get("/buildings/{building_id}/objects")
-async def get_building_objects(building_id: str) -> Dict[str, Any]:
+async def get_building_objects(
+    building_id: str,
+    user: UserContext = Depends(require_bms_config),
+) -> Dict[str, Any]:
     from app.data.buildings_registry import get_building_config
 
     if not get_building_config(building_id):
@@ -152,7 +173,11 @@ async def get_building_objects(building_id: str) -> Dict[str, Any]:
 
 
 @router.put("/buildings/{building_id}/objects")
-async def update_building_objects(building_id: str, body: Dict[str, str]) -> Dict[str, Any]:
+async def update_building_objects(
+    building_id: str,
+    body: Dict[str, str],
+    user: UserContext = Depends(require_bms_config),
+) -> Dict[str, Any]:
     from app.data.buildings_registry import get_building_config
 
     if not get_building_config(building_id):
@@ -163,12 +188,16 @@ async def update_building_objects(building_id: str, body: Dict[str, str]) -> Dic
 
 
 @router.get("/object-mappings")
-async def list_object_mappings() -> Dict[str, Any]:
+async def list_object_mappings(
+    user: UserContext = Depends(require_bms_config),
+) -> Dict[str, Any]:
     return {"mappings": list_all_mappings()}
 
 
 @router.get("/objects")
-async def list_objects() -> Dict[str, Any]:
+async def list_objects(
+    user: UserContext = Depends(require_bms_config),
+) -> Dict[str, Any]:
     client = _get_client()
     raw = await client.get_objects()
     items = flatten_metasys_objects(raw if isinstance(raw, (list, dict)) else {"items": raw})
@@ -176,7 +205,10 @@ async def list_objects() -> Dict[str, Any]:
 
 
 @router.get("/objects/{object_id}/present-value")
-async def get_present_value(object_id: str) -> Dict[str, Any]:
+async def get_present_value(
+    object_id: str,
+    user: UserContext = Depends(require_bms_config),
+) -> Dict[str, Any]:
     client = _get_client()
     value = await client.get_present_value(object_id)
     if value is None:
@@ -185,25 +217,41 @@ async def get_present_value(object_id: str) -> Dict[str, Any]:
 
 
 @router.post("/objects/{object_id}/command")
-async def write_command(object_id: str, command: JCICommand) -> dict:
-    client = _get_client()
-    success = await client.write_command(object_id, command.attribute, command.value)
-    if not success:
-        raise HTTPException(status_code=502, detail=bilingual_error("Command failed", "فشل تنفيذ الأمر"))
-    return {
-        "success": True,
-        "object_id": object_id,
-        "message": bilingual_success("Command sent to Metasys", "تم إرسال الأمر إلى Metasys"),
-    }
+async def write_command(
+    object_id: str,
+    command: JCICommand,
+    user: UserContext = Depends(require_write_access),
+) -> dict:
+    # Legacy direct Metasys command route is hard-blocked by the same global
+    # write policy as every other control surface. No network write occurs in
+    # pilot READ_ONLY mode.
+    record_audit(
+        actor=user.user_id,
+        tenant=user.user_id,
+        action="jci.command.request",
+        resource=object_id,
+        result="blocked_read_only",
+        metadata={"attribute": command.attribute},
+    )
+    validate_write_request(user, mode=DEFAULT_WRITE_MODE, requested_value=float(command.value) if isinstance(command.value, (int, float)) else None)
+    raise HTTPException(
+        status_code=403,
+        detail=bilingual_error("Write-back is disabled (READ_ONLY mode)", "الكتابة معطلة (وضع القراءة فقط)"),
+    )
 
 
 @router.get("/alarms")
-async def get_alarms() -> List[Dict[str, Any]]:
+async def get_alarms(
+    user: UserContext = Depends(require_bms_config),
+) -> List[Dict[str, Any]]:
     client = _get_client()
     return await client.get_alarms()
 
 
 @router.get("/trends/{object_id}")
-async def get_trend(object_id: str) -> List[Dict[str, Any]]:
+async def get_trend(
+    object_id: str,
+    user: UserContext = Depends(require_bms_config),
+) -> List[Dict[str, Any]]:
     client = _get_client()
     return await client.get_trend(object_id)

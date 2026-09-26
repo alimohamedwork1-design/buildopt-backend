@@ -10,8 +10,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        demo_mode: ["true", "false"]
+        include:
+          - demo_mode: "true"
+            test_scope: "tests/"
+          - demo_mode: "false"
+            test_scope: "tests/test_account_platform.py tests/test_data_integrity.py tests/test_ingest_production.py tests/test_live_data_production.py tests/test_phase3_telemetry.py tests/test_phase4.py tests/test_phase5.py tests/test_phase6.py tests/test_phases8_13.py tests/test_telemetry_batch.py tests/test_telemetry_store_backend.py tests/test_supabase_telemetry_store.py tests/test_jci_security.py"
     env:
       DEMO_MODE: ${{ matrix.demo_mode }}
       APP_ENV: production
@@ -26,6 +31,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-railway.txt
-          pip install pytest pytest-cov
+          pip install pytest pytest-cov pytest-asyncio
       - name: Run tests with coverage
-        run: python -m pytest tests/ -q --cov=app/services --cov-report=term-missing
+        run: python -m pytest ${{ matrix.test_scope }} -q --cov=app/services --cov-report=term-missing

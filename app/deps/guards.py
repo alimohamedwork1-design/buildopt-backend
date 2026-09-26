@@ -38,6 +38,23 @@ def require_write_access(user: UserContext = Depends(get_required_user)) -> User
     return user
 
 
+
+_BMS_CONFIG_ROLES = frozenset({"admin", "bms_integrator", "facility_manager"})
+
+
+def require_bms_config(user: UserContext = Depends(get_required_user)) -> UserContext:
+    """Restrict sensitive BMS configuration/diagnostic operations to trusted roles."""
+    if user.is_read_only:
+        raise HTTPException(status_code=403, detail=bilingual_error("Read-only account", "حساب للقراءة فقط"))
+    if user.is_admin:
+        return user
+    if not _BMS_CONFIG_ROLES.intersection(set(user.roles)):
+        raise HTTPException(
+            status_code=403,
+            detail=bilingual_error("BMS configuration access required", "يتطلب صلاحيات إعداد نظام إدارة المبنى"),
+        )
+    return user
+
 _SEMANTIC_WRITE_ROLES = frozenset({"admin", "bms_integrator", "energy_engineer", "facility_manager"})
 
 

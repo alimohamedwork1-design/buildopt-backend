@@ -8,6 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.user_context import UserContext
+from app.deps.auth import get_optional_user
 from app.services.gateway_token_store import GatewayTokenStore, reset_gateway_token_store
 from app.services.influx_client import InfluxService, _flux_safe_tag
 from app.services.semantic_mapping_service import (
@@ -218,6 +220,19 @@ def test_influx_flux_injection_blocked():
 def test_building_telemetry_history_endpoint(client, fresh_store, monkeypatch):
     _seed_point(fresh_store, name="SAT", source_id="obj-1")
 
+    async def live_user():
+        return UserContext(
+            user_id="tenant-a",
+            account_mode="live",
+            access_level="read_write",
+            roles=["facility_manager"],
+            building_ids=["b1"],
+            enabled_modules={"telemetry"},
+            authenticated=True,
+        )
+
+    app.dependency_overrides[get_optional_user] = live_user
+
     class FakeInflux:
         def infrastructure_state(self):
             return {"status": "connected", "persistence": True}
@@ -234,3 +249,4 @@ def test_building_telemetry_history_endpoint(client, fresh_store, monkeypatch):
 
     bad = client.get("/api/v1/buildings/b1/telemetry/history?hours=999")
     assert bad.status_code == 422
+    app.dependency_overrides.pop(get_optional_user, None)
