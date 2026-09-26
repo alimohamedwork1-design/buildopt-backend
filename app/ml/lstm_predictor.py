@@ -1,4 +1,3 @@
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from app.services import demo_mode
@@ -13,22 +12,15 @@ class LSTMPredictor:
         if self.demo_mode:
             return demo_mode.get_energy_forecast(building_id, horizon_hours).model_dump(mode="json")
 
-        now = datetime.now(timezone.utc)
-        base = 820.0
-        forecast = []
-        for hour in range(1, horizon_hours + 1):
-            ts = now + timedelta(hours=hour)
-            predicted = base + (hour % 6) * 12
-            forecast.append(
-                {
-                    "timestamp": ts.isoformat(),
-                    "predicted_kw": predicted,
-                    "confidence": 0.88,
-                }
-            )
         return {
             "building_id": building_id,
             "horizon_hours": horizon_hours,
-            "forecast": forecast,
+            "forecast": [],
             "demo_mode": False,
+            "state": "MODEL_NOT_DEPLOYED",
+            "model_version": None,
+            "limitations": [
+                "No trained LSTM artifact is deployed for live production use.",
+                "Use the historical baseline forecast endpoint until validation is complete.",
+            ],
         }
