@@ -2,11 +2,31 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.user_context import UserContext
+from app.deps.guards import require_bms_config
 
 
 @pytest.fixture
 def client():
     return TestClient(app)
+
+
+@pytest.fixture
+def bms_client():
+    async def fake_bms_user():
+        return UserContext(
+            user_id="test-bms-admin",
+            account_mode="live",
+            access_level="read_write",
+            roles=["admin"],
+            authenticated=True,
+        )
+
+    app.dependency_overrides[require_bms_config] = fake_bms_user
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(require_bms_config, None)
 
 
 def test_health_score(client):
@@ -69,7 +89,7 @@ def test_health_pipeline(client):
     assert "next_run_human" in job
 
 
-def test_jci_test_connection_live_probe(client, monkeypatch):
+def test_jci_test_connection_live_probe(bms_client, monkeypatch):
     async def fake_test(*_a, **_k):
         return {"status": "connected", "response_ms": 120, "server_version": "v4", "ssl_valid": True}
 
@@ -77,7 +97,7 @@ def test_jci_test_connection_live_probe(client, monkeypatch):
 
     monkeypatch.setattr(jci_metasys.JCIMetasysClient, "test_connection", fake_test)
 
-    response = client.post(
+    response = bms_client.post(
         "/api/v1/jci/test-connection",
         json={
             "host": "https://demo.metasys.com",
@@ -91,8 +111,8 @@ def test_jci_test_connection_live_probe(client, monkeypatch):
     assert data["status"] == "connected"
 
 
-def test_jci_network_diagnostic_demo(client):
-    response = client.post(
+def test_jci_network_diagnostic_demo(bms_client):
+    response = bms_client.post(
         "/api/v1/jci/network-diagnostic",
         json={
             "host": "https://demo.metasys.com",
@@ -107,8 +127,8 @@ def test_jci_network_diagnostic_demo(client):
     assert len(data["checks"]) >= 5
 
 
-def test_jci_save_credentials_demo(client):
-    response = client.post(
+def test_jci_save_credentials_demo(bms_client):
+    response = bms_client.post(
         "/api/v1/jci/save-credentials",
         json={
             "host": "https://metasys.building.com",
