@@ -6,6 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.models.user_context import UserContext
+from app.deps.auth import get_optional_user
 from app.services.collection_config_service import CollectionConfigService, reset_collection_config_service
 from app.services.gateway_token_store import GatewayTokenStore, reset_gateway_token_store
 from app.services.semantic_audit_store import SemanticAuditStore, reset_semantic_audit_store
@@ -155,10 +157,24 @@ def test_tenant_isolation_building_mismatch(fresh_store):
 
 def test_review_queue_endpoint(client, fresh_store):
     _seed(fresh_store, sid="obj-sat", name="AHU1 Supply Air Temp")
+
+    async def live_user():
+        return UserContext(
+            user_id="tenant-a",
+            account_mode="live",
+            access_level="read_write",
+            roles=["facility_manager"],
+            building_ids=["b1"],
+            enabled_modules={"tag-mapper"},
+            authenticated=True,
+        )
+
+    app.dependency_overrides[get_optional_user] = live_user
     res = client.get("/api/v1/semantic/buildings/b1/review-queue")
     assert res.status_code == 200
     body = res.json()
     assert body["total"] >= 1
+    app.dependency_overrides.pop(get_optional_user, None)
 
 
 def test_gateway_scoped_config(client, fresh_store, monkeypatch):
