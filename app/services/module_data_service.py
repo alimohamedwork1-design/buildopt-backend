@@ -111,7 +111,7 @@ async def get_module_data(
         payload["demo_mode"] = live_data.demo_mode
         if not live_data.demo_mode:
             payload["metric_cards"] = _live_metric_cards(live_data, category)
-            payload["charts"] = _live_charts(live_data, building_id)
+            payload["charts"] = _live_charts(live_data, building_id, user=user)
 
     if category in ("overview", "telemetry", "equipment", "optimization"):
         equipment = live_data_service.list_equipment(building_id, user=user)
@@ -153,7 +153,7 @@ async def get_module_data(
         if "charts" not in payload:
             payload["charts"] = _charts(rng, category)
     elif live_data:
-        payload["recommendations"] = _live_recommendations(live_data, category)
+        payload["recommendations"] = _live_recommendations(building_id, category)
         payload["recent_activity"] = _live_activity(live_data, category)
     else:
         payload.setdefault("recommendations", [])
@@ -189,40 +189,50 @@ def _live_metric_cards(live, category: str) -> List[Dict[str, Any]]:
     return cards
 
 
-def _live_charts(live, building_id: str) -> Dict[str, Any]:
-    metrics = live_data_service.get_building_metrics(building_id, "24h")
-    energy_kwh = []
+def _live_charts(
+    live,
+    building_id: str,
+    user: Optional[UserContext] = None,
+) -> Dict[str, Any]:
+    """Return observed live chart data only — never synthesize predictions/scores."""
+    metrics = live_data_service.get_building_metrics(building_id, "24h", user=user)
+    energy_kwh: List[Dict[str, Any]] = []
     if metrics and metrics.metrics:
         for point in metrics.metrics[:24]:
             energy_kwh.append(
                 {
-                    "hour": point.timestamp.hour if hasattr(point.timestamp, "hour") else 0,
+                    "timestamp": point.timestamp.isoformat() if hasattr(point.timestamp, "isoformat") else str(point.timestamp),
                     "actual": round(point.value, 1),
-                    "predicted": round(point.value * 1.02, 1),
+                    "metric": point.metric,
                 }
             )
-    if not energy_kwh:
-        hour = datetime.now(timezone.utc).hour
-        energy_kwh = [
-            {"hour": h, "actual": round(live.energy.total_kw * 0.9, 0), "predicted": round(live.energy.total_kw, 0)}
-            for h in range(max(0, hour - 12), hour + 1)
-        ]
+
     return {
         "energy_kwh": energy_kwh,
-        "optimization_score": [{"hour": i, "score": 85} for i in range(0, 24, 2)],
+        # Forecast and optimization have dedicated endpoints with explicit
+        # provenance. Do not backfill them with synthetic values here.
+        "optimization_score": [],
     }
 
+def _live_recommendations(building_id: str, category: str) -> List[Dict[str, Any]]:
+    """Expose durable recommendation records only; no hard-coded live savings."""
+    from app.services.recommendations_store import list_recommendations
 
-def _live_recommendations(live, category: str) -> List[Dict[str, Any]]:
-    recs = []
-    if live.hvac.cop < 3.5:
-        recs.append({"priority": "HIGH", "title": "Chiller COP below target", "savings_aed_per_month": 240, "category": category})
-    if live.environment.co2_ppm > 800:
-        recs.append({"priority": "MED", "title": "Increase ventilation — CO₂ elevated", "savings_aed_per_month": 45, "category": category})
-    if not recs:
-        recs.append({"priority": "LOW", "title": "System operating within normal range", "savings_aed_per_month": 0, "category": category})
-    return recs
-
+    recs = list_recommendations(building_id)
+    return [
+        {
+            "id": rec.id,
+            "priority": str(rec.severity or "info").upper(),
+            "title": rec.title,
+            "state": rec.state.value,
+            "category": category,
+            "confidence": rec.confidence,
+            "expected_saving_aed": rec.expected_saving_aed,
+            "verified_saving_aed": rec.verified_saving_aed,
+            "evidence": rec.evidence,
+        }
+        for rec in recs[:20]
+    ]
 
 def _live_activity(live, category: str) -> List[Dict[str, Any]]:
     return [
