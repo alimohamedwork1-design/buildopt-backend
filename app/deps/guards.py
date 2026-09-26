@@ -38,7 +38,7 @@ def require_write_access(user: UserContext = Depends(get_required_user)) -> User
     return user
 
 
-_BMS_CONFIG_ROLES = frozenset({"admin", "bms_integrator", "facility_manager"})
+_BMS_CONFIG_ROLES = frozenset({"admin", "bms_integrator"})
 _BMS_OPERATOR_ROLES = frozenset({"admin", "bms_integrator"})
 
 
