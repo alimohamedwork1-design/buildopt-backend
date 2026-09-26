@@ -259,20 +259,29 @@ class PrayerTimes(BaseModel):
     location: str
     times: Dict[str, str]
     hvac_adjustments: List[Dict[str, Any]]
+    source: Optional[str] = None
+    estimated: bool = False
+    limitations: List[str] = Field(default_factory=list)
 
 
 class RamadanMode(BaseModel):
     active: bool
     hijri_date: str
     schedule: List[Dict[str, Any]]
+    source: Optional[str] = None
+    estimated: bool = False
+    limitations: List[str] = Field(default_factory=list)
 
 
 class SandstormAlert(BaseModel):
     active: bool
-    pm10: float
+    pm10: Optional[float] = None
     threshold: float
     actions: List[str]
     timestamp: datetime
+    source: Optional[str] = None
+    data_available: bool = False
+    limitations: List[str] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):
