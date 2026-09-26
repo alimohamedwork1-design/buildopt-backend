@@ -36,12 +36,18 @@ async def get_prayer_times() -> PrayerTimes:
             location="Dubai, UAE",
             times=DEFAULT_PRAYER_TIMES,
             hvac_adjustments=PRAYER_HVAC_ADJUSTMENTS,
+            source="demo_reference" if settings.demo_mode else "fallback_reference",
+            estimated=True,
+            limitations=["Reference schedule only; configure site coordinates for live prayer times."],
         )
 
     url = (
         f"http://api.aladhan.com/v1/timings/{today}"
         f"?latitude={settings.latitude}&longitude={settings.longitude}&method=8"
     )
+    source = "aladhan_api"
+    estimated = False
+    limitations: List[str] = []
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url)
@@ -57,12 +63,18 @@ async def get_prayer_times() -> PrayerTimes:
             }
     except Exception:
         times = DEFAULT_PRAYER_TIMES
+        source = "fallback_reference"
+        estimated = True
+        limitations.append("Prayer-time API unavailable; showing reference times, not live site times.")
 
     return PrayerTimes(
         date=today,
         location="Dubai, UAE",
         times=times,
         hvac_adjustments=PRAYER_HVAC_ADJUSTMENTS,
+        source=source,
+        estimated=estimated,
+        limitations=limitations,
     )
 
 
@@ -76,28 +88,49 @@ def get_ramadan_mode() -> RamadanMode:
         {"event": "suhoor", "action": "maintain_setpoint", "value": 22},
         {"event": "night", "action": "increase_ventilation", "value": 15},
     ]
-    return RamadanMode(active=active, hijri_date=f"1446-{hijri_month:02d}-15", schedule=schedule)
+    return RamadanMode(
+        active=active,
+        hijri_date=f"1446-{hijri_month:02d}-15",
+        schedule=schedule,
+        source="calendar_approximation",
+        estimated=True,
+        limitations=["Ramadan state uses a simplified calendar approximation until an authoritative Hijri/calendar source is configured."],
+    )
 
 
 async def get_sandstorm_alert() -> SandstormAlert:
     settings = get_settings()
     threshold = 500.0
-    pm10 = 120.0 if settings.demo_mode else 120.0
+
+    if not settings.demo_mode:
+        return SandstormAlert(
+            active=False,
+            pm10=None,
+            threshold=threshold,
+            actions=[],
+            timestamp=datetime.now(timezone.utc),
+            source=None,
+            data_available=False,
+            limitations=["No live PM10/air-quality source is configured for this site."],
+        )
+
+    pm10 = 120.0
     active = pm10 > threshold
-    actions = []
-    if active:
-        actions = [
-            "Switch AHUs to recirculation mode",
-            "Close outdoor air dampers",
-            "Alert maintenance team",
-            "Log sandstorm event",
-        ]
+    actions = [
+        "Recommend AHU recirculation review",
+        "Recommend outdoor-air damper review",
+        "Alert maintenance team",
+        "Log sandstorm event",
+    ] if active else []
     return SandstormAlert(
         active=active,
         pm10=pm10,
         threshold=threshold,
         actions=actions,
         timestamp=datetime.now(timezone.utc),
+        source="demo_simulation",
+        data_available=True,
+        limitations=["Demo air-quality value; no physical BMS command is executed."],
     )
 
 
@@ -113,8 +146,10 @@ async def adjust_hvac_for_prayer(prayer: str) -> Dict[str, Any]:
         "success": True,
         "prayer": prayer,
         "adjustment": adjustment,
+        "mode": "ADVISORY",
+        "executed": False,
         "message": {
-            "en": f"HVAC adjusted for {prayer}",
-            "ar": f"تم ضبط التكييف لصلاة {prayer}",
+            "en": f"HVAC adjustment recommendation prepared for {prayer}; no BMS command was sent.",
+            "ar": f"تم إعداد توصية لضبط التكييف لصلاة {prayer}؛ لم يتم إرسال أمر إلى نظام BMS.",
         },
     }
