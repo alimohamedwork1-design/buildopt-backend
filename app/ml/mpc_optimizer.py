@@ -6,6 +6,9 @@ class MPCOptimizer:
         self.demo_mode = demo_mode
 
     def optimize(self, building_id: str, constraints: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not self.demo_mode:
+            return []
+
         max_temp = constraints.get("max_supply_temp", 24.0)
         min_cop = constraints.get("min_cop", 3.2)
 
