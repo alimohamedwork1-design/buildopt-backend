@@ -1,31 +1,31 @@
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import app
 
 
 client = TestClient(app)
 
 
-def test_ingest_status():
-    r = client.get("/api/v1/ingest/status")
-    assert r.status_code == 200
-    assert "demo_mode" in r.json()
+def _ingest_headers() -> dict[str, str]:
+    key = get_settings().ingest_api_key
+    return {"X-API-Key": key} if key else {}
 
 
-def test_ingest_live_without_key_when_no_key_configured():
-    payload = {
+def _payload(power_kw: float = 200.0) -> dict:
+    return {
         "building_id": "burj-khalifa-01",
         "timestamp": "2026-06-28T12:00:00Z",
         "hvac": {
             "supply_air_temp": 14.0,
             "return_air_temp": 24.0,
             "delta_t": 10.0,
-            "power_kw": 200.0,
+            "power_kw": power_kw,
             "cop": 3.7,
         },
         "energy": {
             "total_kw": 850.0,
-            "hvac_kw": 200.0,
+            "hvac_kw": power_kw,
             "lighting_kw": 120.0,
             "other_kw": 530.0,
             "tariff_rate": 0.38,
@@ -40,12 +40,28 @@ def test_ingest_live_without_key_when_no_key_configured():
         "active_alerts": 1,
         "demo_mode": False,
     }
-    r = client.post("/api/v1/ingest/live", json=payload)
+
+
+def test_ingest_status():
+    r = client.get("/api/v1/ingest/status")
     assert r.status_code == 200
-    assert r.json()["demo_mode"] is False
+    assert "demo_mode" in r.json()
 
 
-def test_live_after_ingest():
+def test_ingest_live_auth_posture():
+    settings = get_settings()
+    r = client.post("/api/v1/ingest/live", json=_payload())
+    if settings.ingest_api_key:
+        assert r.status_code == 401
+    else:
+        assert r.status_code == 200
+        assert r.json()["demo_mode"] is False
+
+
+def test_live_after_authenticated_ingest():
+    post = client.post("/api/v1/ingest/live", json=_payload(200.0), headers=_ingest_headers())
+    assert post.status_code == 200
+
     r = client.get("/api/v1/buildings/burj-khalifa-01/live")
     assert r.status_code == 200
     assert r.json()["hvac"]["power_kw"] == 200.0
