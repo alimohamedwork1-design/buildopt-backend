@@ -298,34 +298,12 @@ def get_energy_forecast(
     if allows_simulated_telemetry(user):
         return demo_mode.get_energy_forecast(building_id, horizon_hours)
 
-    influx = _influx(force_live=True)
-    history = influx.query_hourly_kw(building_id, hours=24)
-    if not history:
-        return EnergyForecast(
-            building_id=building_id,
-            horizon_hours=horizon_hours,
-            forecast=[],
-            demo_mode=False,
-        )
-
-    values = [h["value"] for h in history if h.get("metric") == "total_kw"] or [h["value"] for h in history]
-    base_kw = sum(values) / max(len(values), 1)
-    now = datetime.now(timezone.utc)
-    forecast_points: List[EnergyForecastPoint] = []
-    for hour in range(1, horizon_hours + 1):
-        ts = now + timedelta(hours=hour)
-        hour_factor = 1.15 if 12 <= ts.hour < 24 else 0.85
-        forecast_points.append(
-            EnergyForecastPoint(
-                timestamp=ts,
-                predicted_kw=round(base_kw * hour_factor, 1),
-                confidence=0.88,
-            )
-        )
+    # No validated forecasting model or calibrated uncertainty is available here.
+    # A fabricated hourly curve must never be returned as a live prediction.
     return EnergyForecast(
         building_id=building_id,
         horizon_hours=horizon_hours,
-        forecast=forecast_points,
+        forecast=[],
         demo_mode=False,
     )
 
@@ -337,36 +315,8 @@ def get_energy_savings(
     if allows_simulated_telemetry(user):
         return demo_mode.get_energy_savings()
 
-    influx = _influx(force_live=True)
-    history = influx.query_hourly_kw(building_id, hours=720)
-    if history:
-        actual_kwh = sum(h["value"] for h in history)
-        baseline_kwh = actual_kwh * 1.2
-        savings_kwh = baseline_kwh - actual_kwh
-        savings_pct = round((savings_kwh / baseline_kwh) * 100, 1) if baseline_kwh else 0
-        return EnergySavings(
-            baseline_kwh=round(baseline_kwh, 0),
-            actual_kwh=round(actual_kwh, 0),
-            savings_kwh=round(savings_kwh, 0),
-            savings_pct=savings_pct,
-            cost_saved_aed=round(savings_kwh * 0.30, 2),
-            demo_mode=False,
-        )
-
-    live = live_cache.get_live(building_id)
-    if live:
-        actual = live.energy.total_kw * 24 * 30
-        baseline = actual * 1.18
-        savings_kwh = baseline - actual
-        return EnergySavings(
-            baseline_kwh=round(baseline, 0),
-            actual_kwh=round(actual, 0),
-            savings_kwh=round(savings_kwh, 0),
-            savings_pct=round((savings_kwh / baseline) * 100, 1) if baseline else 0,
-            cost_saved_aed=round(savings_kwh * 0.30, 2),
-            demo_mode=False,
-        )
-
+    # Savings require an independently validated baseline and aligned meter
+    # observations. Multiplying actual use by a fixed percentage is not M&V.
     return None
 
 
@@ -388,11 +338,9 @@ def get_dewa_tariff(
     if not live:
         return None
 
-    peak_kwh = live.energy.total_kw * 12
-    off_peak_kwh = live.energy.total_kw * 12
-    tariff = calculate_dewa_tariff(peak_kwh, off_peak_kwh, 950.0)
-    live_cache.set_dewa_tariff(tariff.model_dump(mode="json"))
-    return tariff
+    # One instantaneous kW reading cannot establish a billing period's
+    # peak/off-peak kWh or demand charge. Return no billing estimate.
+    return None
 
 
 def list_equipment(
