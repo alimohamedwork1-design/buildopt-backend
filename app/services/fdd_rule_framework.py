@@ -37,12 +37,12 @@ def _sat_deviation(r: Dict[str, float], t: float) -> bool:
 
 def _simultaneous_heat_cool(r: Dict[str, float], _t: float) -> bool:
     h = r.get("heating_valve_cmd", 0)
-    c = r.get("cooling_valve_cmd", 0) or r.get("chwv", 0)
+    c = r.get("cooling_valve_cmd") if r.get("cooling_valve_cmd") is not None else r.get("chwv", 0)
     return h > 10 and c > 10
 
 
 def _cooling_valve_leak(r: Dict[str, float], t: float) -> bool:
-    cmd = r.get("cooling_valve_cmd", 0) or r.get("chwv", 0)
+    cmd = r.get("cooling_valve_cmd") if r.get("cooling_valve_cmd") is not None else r.get("chwv", 0)
     sat = r.get("supply_air_temp")
     rat = r.get("return_air_temp")
     if sat is None or rat is None:
@@ -67,7 +67,7 @@ def _sensor_flatline(r: Dict[str, float], _t: float) -> bool:
 
 def _static_pressure_tracking(r: Dict[str, float], t: float) -> bool:
     sp = r.get("static_pressure")
-    sp_set = r.get("static_pressure_setpoint") or r.get("static_pressure_sp")
+    sp_set = r.get("static_pressure_setpoint") if r.get("static_pressure_setpoint") is not None else r.get("static_pressure_sp")
     if sp is None or sp_set is None:
         return False
     return abs(sp - sp_set) > t
@@ -82,9 +82,9 @@ def _oa_damper_mismatch(r: Dict[str, float], t: float) -> bool:
 
 
 def _mat_inconsistency(r: Dict[str, float], t: float) -> bool:
-    mat = r.get("mixed_air_temp") or r.get("mat")
-    oat = r.get("outdoor_air_temp") or r.get("oat")
-    rat = r.get("return_air_temp") or r.get("rat")
+    mat = r.get("mixed_air_temp") if r.get("mixed_air_temp") is not None else r.get("mat")
+    oat = r.get("outdoor_air_temp") if r.get("outdoor_air_temp") is not None else r.get("oat")
+    rat = r.get("return_air_temp") if r.get("return_air_temp") is not None else r.get("rat")
     oa_pct = r.get("oa_damper_feedback", r.get("oa_damper_cmd", 50))
     if mat is None or oat is None or rat is None:
         return False
