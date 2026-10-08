@@ -29,7 +29,7 @@ class FddRuleDefinition:
 
 def _sat_deviation(r: Dict[str, float], t: float) -> bool:
     sat = r.get("supply_air_temp")
-    sp = r.get("supply_air_setpoint") or r.get("sat_sp")
+    sp = r.get("supply_air_setpoint") if r.get("supply_air_setpoint") is not None else r.get("sat_sp")
     if sat is None or sp is None:
         return False
     return abs(sat - sp) > t
@@ -57,7 +57,7 @@ def _fan_mismatch(r: Dict[str, float], _t: float) -> bool:
 
 
 def _filter_dp_high(r: Dict[str, float], t: float) -> bool:
-    dp = r.get("filter_pressure_pa") or r.get("filter_dp")
+    dp = r.get("filter_pressure_pa") if r.get("filter_pressure_pa") is not None else r.get("filter_dp")
     return dp is not None and dp > t
 
 
@@ -92,7 +92,30 @@ def _mat_inconsistency(r: Dict[str, float], t: float) -> bool:
     return abs(mat - expected) > t
 
 
+
+
+def _tracking(r: Dict[str, float], t: float, actual: str, target: str) -> bool:
+    measured, setpoint = r.get(actual), r.get(target)
+    return measured is not None and setpoint is not None and abs(measured - setpoint) > t
+
+
+def _feedback_mismatch(r: Dict[str, float], t: float, command: str, feedback: str) -> bool:
+    cmd, status = r.get(command), r.get(feedback)
+    return cmd is not None and status is not None and abs(cmd - status) > t
+
+
+def _binary_mismatch(r: Dict[str, float], _t: float, command: str, status: str) -> bool:
+    cmd, actual = r.get(command), r.get(status)
+    return cmd is not None and actual is not None and ((cmd > 0.5) != (actual > 0.5))
+
 RULE_CHECKS: Dict[str, RuleCheck] = {
+    "chws_tracking": lambda r, t: _tracking(r, t, "chws_temp", "chws_setpoint"),
+    "pump_command_mismatch": lambda r, t: _binary_mismatch(r, t, "pump_command", "pump_status"),
+    "dp_tracking": lambda r, t: _tracking(r, t, "differential_pressure", "dp_setpoint"),
+    "cw_supply_tracking": lambda r, t: _tracking(r, t, "cw_supply_temp", "cw_supply_setpoint"),
+    "zone_temp_tracking": lambda r, t: _tracking(r, t, "zone_temp", "zone_setpoint"),
+    "valve_anomaly": lambda r, t: _feedback_mismatch(r, t, "valve_command", "valve_feedback"),
+    "damper_tracking": lambda r, t: _feedback_mismatch(r, t, "damper_command", "damper_feedback"),
     "supply_air_temp_deviation": _sat_deviation,
     "sat_setpoint_tracking": _sat_deviation,
     "simultaneous_heating_cooling": _simultaneous_heat_cool,
@@ -125,27 +148,27 @@ AHU_RULES: List[FddRuleDefinition] = [
 CHILLER_RULES: List[FddRuleDefinition] = [
     FddRuleDefinition("CH-001", "CHILLER", "cop_degradation", ["cop"], threshold=3.0, severity="warning", check="cop_degradation", description="COP below threshold"),
     FddRuleDefinition("CH-002", "CHILLER", "low_delta_t", ["chws_temp", "chwr_temp"], threshold=4.0, severity="warning", check="low_delta_t", description="Low chilled water delta-T"),
-    FddRuleDefinition("CH-003", "CHILLER", "chws_tracking", ["chws_temp", "chws_setpoint"], threshold=2.0, severity="warning", check="supply_air_temp_deviation", description="CHW supply temperature tracking failure"),
+    FddRuleDefinition("CH-003", "CHILLER", "chws_tracking", ["chws_temp", "chws_setpoint"], threshold=2.0, severity="warning", check="chws_tracking", description="CHW supply temperature tracking failure"),
     FddRuleDefinition("CH-004", "CHILLER", "short_cycling", ["compressor_starts_per_hr"], threshold=6, severity="warning", check="short_cycling", description="Possible short cycling"),
 ]
 
 PUMP_RULES: List[FddRuleDefinition] = [
-    FddRuleDefinition("PUMP-001", "PUMP", "pump_command_mismatch", ["pump_command", "pump_status"], threshold=1, severity="warning", check="fan_status_mismatch", description="Pump command/status mismatch"),
-    FddRuleDefinition("PUMP-002", "PUMP", "dp_tracking", ["differential_pressure", "dp_setpoint"], threshold=0.5, severity="warning", check="static_pressure_tracking", description="Differential pressure tracking issue"),
+    FddRuleDefinition("PUMP-001", "PUMP", "pump_command_mismatch", ["pump_command", "pump_status"], threshold=1, severity="warning", check="pump_command_mismatch", description="Pump command/status mismatch"),
+    FddRuleDefinition("PUMP-002", "PUMP", "dp_tracking", ["differential_pressure", "dp_setpoint"], threshold=0.5, severity="warning", check="dp_tracking", description="Differential pressure tracking issue"),
 ]
 
 COOLING_TOWER_RULES: List[FddRuleDefinition] = [
-    FddRuleDefinition("CT-001", "COOLING_TOWER", "cw_supply_tracking", ["cw_supply_temp", "cw_supply_setpoint"], threshold=2.0, severity="warning", check="supply_air_temp_deviation", description="CW supply temperature tracking"),
+    FddRuleDefinition("CT-001", "COOLING_TOWER", "cw_supply_tracking", ["cw_supply_temp", "cw_supply_setpoint"], threshold=2.0, severity="warning", check="cw_supply_tracking", description="CW supply temperature tracking"),
     FddRuleDefinition("CT-002", "COOLING_TOWER", "fan_mismatch", ["fan_command", "fan_status"], threshold=1, severity="warning", check="fan_status_mismatch", description="Cooling tower fan command/status mismatch"),
 ]
 
 FCU_RULES: List[FddRuleDefinition] = [
-    FddRuleDefinition("FCU-001", "FCU", "zone_temp_tracking", ["zone_temp", "zone_setpoint"], threshold=2.0, severity="warning", check="supply_air_temp_deviation", description="Zone temperature tracking failure"),
-    FddRuleDefinition("FCU-002", "FCU", "valve_anomaly", ["valve_command", "valve_feedback"], threshold=15, severity="warning", check="oa_damper_mismatch", description="Valve command/feedback mismatch"),
+    FddRuleDefinition("FCU-001", "FCU", "zone_temp_tracking", ["zone_temp", "zone_setpoint"], threshold=2.0, severity="warning", check="zone_temp_tracking", description="Zone temperature tracking failure"),
+    FddRuleDefinition("FCU-002", "FCU", "valve_anomaly", ["valve_command", "valve_feedback"], threshold=15, severity="warning", check="valve_anomaly", description="Valve command/feedback mismatch"),
 ]
 
 VAV_RULES: List[FddRuleDefinition] = [
-    FddRuleDefinition("VAV-001", "VAV", "damper_tracking", ["damper_command", "damper_feedback"], threshold=15, severity="warning", check="oa_damper_mismatch", description="VAV damper command/feedback mismatch"),
+    FddRuleDefinition("VAV-001", "VAV", "damper_tracking", ["damper_command", "damper_feedback"], threshold=15, severity="warning", check="damper_tracking", description="VAV damper command/feedback mismatch"),
     FddRuleDefinition("VAV-002", "VAV", "airflow_pressure", ["static_pressure", "static_pressure_setpoint"], threshold=0.3, severity="warning", check="static_pressure_tracking", description="Static pressure tracking issue"),
 ]
 
