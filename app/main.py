@@ -30,6 +30,7 @@ from app.api import (
     recommendations,
     refrigeration,
     reports,
+    review,
     savings,
     semantic,
     sessions,
@@ -169,6 +170,7 @@ app.include_router(points.router, prefix=api_prefix)
 app.include_router(semantic.router, prefix=api_prefix)
 app.include_router(fdd.router, prefix=api_prefix)
 app.include_router(reports.router, prefix=api_prefix)
+app.include_router(review.router, prefix=api_prefix)
 
 
 @app.get("/")
