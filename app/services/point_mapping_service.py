@@ -42,6 +42,8 @@ def suggest_point_mapping(point_name: str) -> PointMappingSuggestion:
     if not tokens:
         return PointMappingSuggestion(point_name, None, None, 0.0, "PENDING_REVIEW", "Empty point name")
     equipment = next((token for token in tokens if re.fullmatch(r"(?:AHU|VAV|CH|CHLR|CHWP|CT|FCU)[0-9]{1,4}", token)), None)
+    if equipment is None:
+        equipment = next((f"{token}{tokens[i + 1]}" for i, token in enumerate(tokens[:-1]) if re.fullmatch(r"(?:AHU|VAV|CH|CHLR|CHWP|CT|FCU)", token) and re.fullmatch(r"[0-9]{1,4}", tokens[i + 1])), None)
     normalized = ["".join(tokens), *tokens]
     matches = [
         semantic for semantic, aliases in ALIASES.items()
