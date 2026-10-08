@@ -15,7 +15,7 @@ from app.models.user_context import UserContext
 from app.services.measurement_verification import calculate_eui, estimate_unverified_savings
 from app.services.scenario_constraints import ReadOnlyScenario
 
-router = APIRouter(prefix="/api/review", tags=["Read-only review"])
+router = APIRouter(prefix="/review", tags=["Read-only review"])
 
 
 class EnergyDifferenceRequest(BaseModel):
