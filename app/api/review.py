@@ -15,6 +15,7 @@ from app.models.user_context import UserContext
 from app.services.measurement_verification import calculate_eui, estimate_unverified_savings
 from app.services.scenario_constraints import ReadOnlyScenario
 from app.services.root_cause_review import FaultEvidence, suggest_root_causes
+from app.services.chiller_efficiency_review import ChillerEfficiencyInput, calculate_chiller_efficiency
 
 router = APIRouter(prefix="/review", tags=["Read-only review"])
 
@@ -67,3 +68,8 @@ async def root_cause_review(body: RootCauseRequest, _user: UserContext = Depends
         "mode": "READ_ONLY",
         "hypotheses": [item.model_dump() for item in suggest_root_causes(body.evidence)],
     }
+
+
+@router.post("/chiller-efficiency")
+async def chiller_efficiency_review(body: ChillerEfficiencyInput, _user: UserContext = Depends(get_required_user)):
+    return calculate_chiller_efficiency(body)
