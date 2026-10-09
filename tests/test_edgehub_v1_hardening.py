@@ -18,7 +18,7 @@ def edge_python(script: str, *, env: dict | None = None) -> subprocess.Completed
     variables = {**os.environ, **(env or {})}
     variables["PYTHONPATH"] = str(EDGE)
     return subprocess.run(
-        [sys.executable, "-c", script], env=variables, cwd=str(ROOT),
+        [sys.executable, "-c", script], env=variables, cwd=str(EDGE),
         capture_output=True, text=True, timeout=20,
     )
 
