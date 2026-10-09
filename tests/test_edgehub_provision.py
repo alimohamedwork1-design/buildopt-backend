@@ -39,6 +39,7 @@ def test_provision_requires_master_key_even_in_dev(monkeypatch):
 def test_scoped_provision_rejects_bad_credentials(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("INGEST_API_KEY", "edgehub-admin-test")
+    monkeypatch.setenv("EDGEHUB_SANDBOX_PROVISION_ENABLED", "true")
     get_settings.cache_clear()
     client = TestClient(app)
     response = client.post("/api/v1/gateways/sim-unit-001/provision", json=_body(),
@@ -50,6 +51,7 @@ def test_scoped_provision_rejects_bad_credentials(monkeypatch):
 def test_provision_binds_scope_and_reports_mode(monkeypatch):
     monkeypatch.setenv("APP_ENV", "development")
     monkeypatch.setenv("INGEST_API_KEY", "edgehub-admin-test")
+    monkeypatch.setenv("EDGEHUB_SANDBOX_PROVISION_ENABLED", "true")
     monkeypatch.setenv("SECRET_KEY", "test-secret-edgehub")
     get_settings.cache_clear()
     reset_gateway_token_store()
@@ -90,3 +92,13 @@ def test_provision_binds_scope_and_reports_mode(monkeypatch):
     assert spoof.status_code == 403
     get_settings.cache_clear()
     reset_gateway_token_store()
+
+def test_sandbox_provision_disabled_by_default(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("INGEST_API_KEY", "edgehub-admin-test")
+    monkeypatch.delenv("EDGEHUB_SANDBOX_PROVISION_ENABLED", raising=False)
+    get_settings.cache_clear()
+    client = TestClient(app)
+    r = client.post("/api/v1/gateways/sim-unit-002/provision", json=_body(), headers=_headers())
+    assert r.status_code == 403
+    get_settings.cache_clear()
