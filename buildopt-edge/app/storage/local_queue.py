@@ -141,15 +141,13 @@ class LocalQueue:
             return
         overflow = count - self.max_rows
         self.critical_overflow = True
+        # NEVER delete unacknowledged telemetry just to meet a row budget.
+        # Surface the critical condition and keep all data until explicitly
+        # resolved by the operator (storage expansion / verified replay).
         logger.critical(
-            "Queue overflow — dropping %s oldest unacknowledged events (policy: drop_oldest_with_critical_event)",
+            "Queue retention limit exceeded by %s events; retaining all unacknowledged data",
             overflow,
         )
-        self._conn.execute(
-            "delete from telemetry_queue where id in (select id from telemetry_queue order by id asc limit ?)",
-            (overflow,),
-        )
-        self._conn.commit()
 
     def metrics(self) -> Dict[str, Any]:
         return {
