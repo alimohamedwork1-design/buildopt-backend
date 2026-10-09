@@ -78,7 +78,14 @@ async def collect_readings(
     readings: List[Dict[str, Any]] = []
     edge_received_at = datetime.now(timezone.utc).isoformat()
     for logical_key, object_id in mapping.items():
-        value = await connector.read_point(object_id)
+        try:
+            value = await connector.read_point(object_id)
+        except Exception as exc:
+            logger.warning(
+                "Point read failed source_point_id=%s: %s",
+                object_id, type(exc).__name__,
+            )
+            continue
         if value is None:
             continue
         source_timestamp = edge_received_at
@@ -91,6 +98,9 @@ async def collect_readings(
                 quality = str(value["quality"])
         else:
             scalar = value
+        if scalar is None:
+            logger.warning("Point returned null value: %s", object_id)
+            continue
         event_id = stable_event_id(
             gateway_id=gateway_id,
             building_id=building_id,
