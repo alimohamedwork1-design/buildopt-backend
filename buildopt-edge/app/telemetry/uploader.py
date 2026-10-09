@@ -167,6 +167,7 @@ class CloudUploader:
             "protocol": self.settings.connector,
             "version": "1.0.0",
             "connector_status": connector_status,
+            "operating_mode": self.settings.operating_mode,
             "telemetry_rate": telemetry_rate,
             "queue_depth": queue_depth,
             "oldest_queued_event_seconds": oldest_queued_event_seconds,
