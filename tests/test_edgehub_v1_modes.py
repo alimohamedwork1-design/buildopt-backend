@@ -17,7 +17,7 @@ from app.config import EdgeSettings
 s = EdgeSettings.from_env()
 assert s.operating_mode in ('offline','hybrid','hybrid_4g')
 assert s.operating_mode == __import__('os').environ['EDGE_OPERATING_MODE']
-"""], env=env, capture_output=True, text=True, timeout=15,
+"""], env=env, cwd=str(ROOT / "buildopt-edge"), capture_output=True, text=True, timeout=15,
     )
 
 
@@ -31,7 +31,7 @@ def test_invalid_mode_rejected():
     env = dict(os.environ, PYTHONPATH=str(ROOT / "buildopt-edge"), EDGE_OPERATING_MODE="unsafe")
     result = subprocess.run(
         [sys.executable, "-c", "from app.config import EdgeSettings; EdgeSettings.from_env()"],
-        env=env, capture_output=True, text=True, timeout=15,
+        env=env, cwd=str(ROOT / "buildopt-edge"), capture_output=True, text=True, timeout=15,
     )
     assert result.returncode != 0
     assert "EDGE_OPERATING_MODE" in result.stderr
