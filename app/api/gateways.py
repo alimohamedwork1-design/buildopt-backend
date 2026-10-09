@@ -43,6 +43,7 @@ class GatewayHeartbeat(BaseModel):
     telemetry_rate_per_minute: float = 0.0
     edge_clock_at: datetime | None = None
     connector_error: str | None = None
+    operating_mode: str | None = None
 
 
 @router.post("/heartbeat")
@@ -89,6 +90,7 @@ async def gateway_heartbeat(
         clock_drift_seconds=clock_drift_seconds,
         edge_clock_at=body.edge_clock_at,
         connector_error=body.connector_error,
+        operating_mode=body.operating_mode if body.operating_mode in (None, "offline", "hybrid", "hybrid_4g") else None,
     )
     return {
         "status": "ok",
@@ -105,17 +107,80 @@ async def list_gateways(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict:
     settings = get_settings()
-    is_production = settings.app_env.lower() in ("production", "prod")
-    has_key = bool(settings.ingest_api_key)
-    if is_production and has_key:
-        if x_api_key != settings.ingest_api_key and not user.authenticated:
-            raise HTTPException(status_code=401, detail=bilingual_error("Authentication required", "المصادقة مطلوبة"))
+    # Gateway state is tenant/site scoped. Never show the whole fleet to anonymous
+    # callers or authenticated users with no granted buildings.
+    master_key = bool(settings.ingest_api_key) and x_api_key == settings.ingest_api_key
+    if not user.authenticated and not master_key:
+        raise HTTPException(status_code=401, detail=bilingual_error("Authentication required", "المصادقة مطلوبة"))
 
     gateways = edge_heartbeat_store.list_gateways()
-    if user.authenticated and user.building_ids:
+    if not master_key and not user.is_admin:
         allowed = set(user.building_ids)
         gateways = [g for g in gateways if g.get("building_id") in allowed]
     return {"gateways": gateways}
+
+
+class ProvisionTestGatewayRequest(BaseModel):
+    tenant_id: str = Field(min_length=3, max_length=100)
+    building_id: str = Field(min_length=3, max_length=100)
+    connector_id: str = "modbus"
+    label: str = "SIMULATION ONLY"
+    expires_in_days: int = Field(default=7, ge=1, le=30)
+    confirm_test_building: bool = False
+
+
+@router.post("/{gateway_id}/provision")
+async def provision_test_gateway(
+    gateway_id: str,
+    body: ProvisionTestGatewayRequest,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict:
+    """Administrative, explicitly simulation-only gateway provisioning.
+
+    The master ingest secret NEVER goes onto an edge device or web frontend.
+    The destination building must already be an authorized dedicated sandbox.
+    """
+    if not get_settings().ingest_api_key:
+        raise HTTPException(status_code=503, detail=bilingual_error(
+            "Master ingest key must be configured", "مفتاح الإدارة الرئيسي غير مُعد",
+        ))
+    if not get_settings().edgehub_sandbox_provision_enabled:
+        raise HTTPException(status_code=403, detail=bilingual_error(
+            "Sandbox gateway provisioning is disabled", "تسجيل الأجهزة التجريبية غير مفعّل",
+        ))
+    verify_master_ingest_key(x_api_key)
+    if not gateway_id.startswith("sim-") or not body.confirm_test_building or body.connector_id != "modbus":
+        raise HTTPException(status_code=400, detail=bilingual_error(
+            "Dedicated sim-* Modbus gateway and test-building confirmation required",
+            "مطلوب Gateway تجريبي sim-* وتأكيد المبنى الاختباري",
+        ))
+    store = get_telemetry_store()
+    existing = store.get_gateway(gateway_id)
+    if existing and (
+        existing["tenant_id"] != body.tenant_id
+        or existing["building_id"] != body.building_id
+        or existing["connector_id"] != body.connector_id
+    ):
+        raise HTTPException(status_code=409, detail=bilingual_error(
+            "Gateway is already bound to a different scope", "الجهاز مسجل بالفعل بنطاق مختلف",
+        ))
+    store.register_gateway(
+        gateway_id=gateway_id, tenant_id=body.tenant_id,
+        building_id=body.building_id, connector_id=body.connector_id,
+    )
+    from datetime import timedelta
+    expiry = datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)
+    issued = get_gateway_token_store().issue(
+        gateway_id=gateway_id, label=body.label, expires_at=expiry
+    )
+    return {
+        "gateway_id": gateway_id, "building_id": body.building_id,
+        "tenant_id": body.tenant_id, "connector_id": body.connector_id,
+        "token_id": issued["token_id"], "token": issued["token"],
+        "expires_at": issued.get("expires_at"),
+        "simulation_only": True,
+    }
+
 
 
 class IssueTokenRequest(BaseModel):
