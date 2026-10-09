@@ -140,6 +140,10 @@ async def provision_test_gateway(
     The master ingest secret NEVER goes onto an edge device or web frontend.
     The destination building must already be an authorized dedicated sandbox.
     """
+    if not get_settings().ingest_api_key:
+        raise HTTPException(status_code=503, detail=bilingual_error(
+            "Master ingest key must be configured", "مفتاح الإدارة الرئيسي غير مُعد",
+        ))
     verify_master_ingest_key(x_api_key)
     if not gateway_id.startswith("sim-") or not body.confirm_test_building or body.connector_id != "modbus":
         raise HTTPException(status_code=400, detail=bilingual_error(
