@@ -102,6 +102,11 @@ class CloudUploader:
         oldest_queued_event_seconds: Optional[int] = None,
         replay: bool = False,
     ) -> bool:
+        """ACK an entire batch only when every event was accepted or deduped.
+
+        A partial 200 must *never* remove a buffered event. Stable event IDs
+        allow safe retry of the whole batch, including already accepted rows.
+        """
         payload = {
             "gateway_id": self.settings.gateway_id,
             "tenant_id": self.settings.tenant_id,
@@ -110,24 +115,37 @@ class CloudUploader:
             "readings": readings,
         }
         url = f"{self.settings.cloud_api_url}/api/v1/telemetry/batch"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(url, json=payload, headers=self._headers())
-            if r.status_code == 200:
-                body = r.json()
-                accepted = int(body.get("accepted", 0))
-                if replay:
-                    self.events_replayed_total += accepted
-                else:
-                    self.events_uploaded_total += accepted
-                self.last_successful_upload_at = datetime.now(timezone.utc).isoformat()
-                self._upload_timestamps.append(datetime.now(timezone.utc).timestamp())
-                await self.send_heartbeat(
-                    connector_status="ONLINE",
-                    telemetry_rate=accepted,
-                    queue_depth=queue_depth,
-                    oldest_queued_event_seconds=oldest_queued_event_seconds,
-                )
-                return True
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(url, json=payload, headers=self._headers())
+            if response.status_code != 200:
+                self.upload_failures_total += 1
+                return False
+            body = response.json()
+            accepted = int(body.get("accepted", 0))
+            duplicates = int(body.get("duplicates", 0))
+            rejected = int(body.get("rejected", 0))
+            if (
+                rejected != 0 or accepted + duplicates != len(readings)
+                or body.get("gateway_id", self.settings.gateway_id) != self.settings.gateway_id
+                or body.get("building_id", self.settings.building_id) != self.settings.building_id
+            ):
+                self.upload_failures_total += 1
+                return False
+            if replay:
+                self.events_replayed_total += accepted
+            else:
+                self.events_uploaded_total += accepted
+            now = datetime.now(timezone.utc)
+            self.last_successful_upload_at = now.isoformat()
+            self._upload_timestamps.append(now.timestamp())
+            await self.send_heartbeat(
+                connector_status="ONLINE", telemetry_rate=accepted,
+                queue_depth=queue_depth,
+                oldest_queued_event_seconds=oldest_queued_event_seconds,
+            )
+            return True
+        except (httpx.RequestError, ValueError, TypeError, KeyError):
             self.upload_failures_total += 1
             return False
 
