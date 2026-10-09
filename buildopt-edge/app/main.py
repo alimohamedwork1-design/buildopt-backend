@@ -300,12 +300,13 @@ async def run_edge() -> None:
         except ConnectorError as exc:
             logger.warning("Connector error: %s", exc)
             qm = queue.metrics()
-            await uploader.send_heartbeat(
-                connector_status=exc.code,
-                queue_depth=qm["queue_depth"],
-                oldest_queued_event_seconds=qm["oldest_queued_event_seconds"],
-                connector_error=str(exc),
-            )
+            if settings.operating_mode != "offline":
+                await uploader.send_heartbeat(
+                    connector_status=exc.code,
+                    queue_depth=qm["queue_depth"],
+                    oldest_queued_event_seconds=qm["oldest_queued_event_seconds"],
+                    connector_error=str(exc),
+                )
         except Exception as exc:
             logger.exception("Edge loop error: %s", exc)
 
