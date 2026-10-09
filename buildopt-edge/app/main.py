@@ -198,6 +198,13 @@ async def run_edge() -> None:
     settings = EdgeSettings.from_env()
     if not settings.building_id:
         raise SystemExit("BUILDING_ID is required")
+    if settings.connector == "modbus" and settings.operating_mode != "offline":
+        if not settings.gateway_api_key.startswith("bo_gw_"):
+            raise SystemExit("Modbus Cloud mode requires a scoped bo_gw_* token; never use master INGEST_API_KEY")
+        if settings.ingest_api_key:
+            raise SystemExit("Master INGEST_API_KEY must never be on physical Modbus Edge Hub")
+        if not settings.cloud_api_url.startswith("https://"):
+            raise SystemExit("Modbus Cloud mode requires HTTPS backend")
 
     queue = LocalQueue(settings.queue_db_path)
     uploader = CloudUploader(settings)
