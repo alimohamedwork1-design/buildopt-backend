@@ -144,6 +144,10 @@ async def provision_test_gateway(
         raise HTTPException(status_code=503, detail=bilingual_error(
             "Master ingest key must be configured", "مفتاح الإدارة الرئيسي غير مُعد",
         ))
+    if not get_settings().edgehub_sandbox_provision_enabled:
+        raise HTTPException(status_code=403, detail=bilingual_error(
+            "Sandbox gateway provisioning is disabled", "تسجيل الأجهزة التجريبية غير مفعّل",
+        ))
     verify_master_ingest_key(x_api_key)
     if not gateway_id.startswith("sim-") or not body.confirm_test_building or body.connector_id != "modbus":
         raise HTTPException(status_code=400, detail=bilingual_error(
