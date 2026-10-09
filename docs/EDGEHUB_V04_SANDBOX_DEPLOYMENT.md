@@ -11,7 +11,7 @@
 ## Prerequisites for real E2E (not yet performed)
 
 1. Merge and deploy backend PR and frontend PR together to a **test** environment.
-2. Configure backend `APP_ENV=production`, nonempty `INGEST_API_KEY`, secure `SECRET_KEY`, and a durable telemetry store.
+2. Configure a dedicated backend **staging** environment with nonempty `INGEST_API_KEY`, secure `SECRET_KEY`, a durable telemetry store, and `EDGEHUB_SANDBOX_PROVISION_ENABLED=true`. Leave this flag **false** in operational production.
 3. Ensure that the `tenant_id` and `building_id` identify an already-authorized **nonoperational sandbox building**. This API does **not** create or validate an account-owned building.
 4. On an admin machine, set `BUILDOPT_ADMIN_INGEST_KEY` in the environment (never on the Edge):
    `python provision.py --cloud-url https://YOUR-BACKEND --gateway-id sim-edge-lab-001 --building-id SANDBOX_BUILDING --tenant-id SANDBOX_TENANT --confirm-test-building`.
