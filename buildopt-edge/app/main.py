@@ -148,7 +148,11 @@ async def resolve_collection_mapping(settings: EdgeSettings, uploader: CloudUplo
     if bootstrap:
         logger.info("Using bootstrap mapped_points.json (%d approved keys)", len(bootstrap))
         return bootstrap
-    cloud_mapping = await uploader.fetch_collection_config()
+    try:
+        cloud_mapping = await uploader.fetch_collection_config()
+    except Exception as exc:
+        logger.warning("Cloud mapping fetch unavailable; checking last-known-good cache: %s", type(exc).__name__)
+        cloud_mapping = {}
     if cloud_mapping:
         logger.info(
             "Using approved cloud collection config (%d keys, version=%s)",
@@ -176,7 +180,11 @@ async def maybe_refresh_collection_mapping(
     current: Dict[str, str],
 ) -> Dict[str, str]:
     """Periodic version-aware refresh — keeps last known config on failure."""
-    refreshed = await uploader.fetch_collection_config()
+    try:
+        refreshed = await uploader.fetch_collection_config()
+    except Exception as exc:
+        logger.warning("Mapping refresh deferred (WAN offline): %s", type(exc).__name__)
+        return current
     if refreshed:
         return refreshed
     return current
