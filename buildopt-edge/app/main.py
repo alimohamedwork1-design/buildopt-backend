@@ -194,35 +194,42 @@ async def run_edge() -> None:
     queue = LocalQueue(settings.queue_db_path)
     uploader = CloudUploader(settings)
     connector = build_connector(settings)
-    mapping = await resolve_collection_mapping(settings, uploader)
-
-    if mapping:
-        await uploader.sync_discovery(mapping_to_discovery_points(mapping, settings.connector))
+    if settings.operating_mode == "offline":
+        mapping = load_mapped_points(settings.mapped_points_file) or uploader.load_cached_mapping()
+        logger.info("Offline mode: local/cached mapping only, WAN access disabled")
     else:
-        await uploader.send_heartbeat(
-            connector_status="NOT_CONFIGURED",
-            connector_error="No approved collection config or bootstrap mapping",
-        )
+        mapping = await resolve_collection_mapping(settings, uploader)
+        if mapping:
+            try:
+                await uploader.sync_discovery(mapping_to_discovery_points(mapping, settings.connector))
+            except Exception as exc:
+                logger.warning("Discovery delayed until WAN returns: %s", type(exc).__name__)
+        else:
+            await uploader.send_heartbeat(
+                connector_status="NOT_CONFIGURED",
+                connector_error="No approved collection config or bootstrap mapping",
+            )
 
     logger.info(
-        "Starting gateway=%s building=%s connector=%s cloud=%s",
+        "Starting gateway=%s building=%s connector=%s operating_mode=%s",
         settings.gateway_id,
         settings.building_id,
         settings.connector,
-        settings.cloud_api_url,
+        settings.operating_mode,
     )
 
     poll_cycles = 0
     while not _shutdown:
         try:
             poll_cycles += 1
-            if poll_cycles % 20 == 0 and not load_mapped_points(settings.mapped_points_file):
+            if settings.operating_mode != "offline" and poll_cycles % 20 == 0 and not load_mapped_points(settings.mapped_points_file):
                 mapping = await maybe_refresh_collection_mapping(settings, uploader, mapping)
             q_metrics = queue.metrics()
             health = await connector.health()
             status = health.get("status", "OFFLINE")
             if status not in ("ONLINE", "connected"):
-                await uploader.send_heartbeat(
+                if settings.operating_mode != "offline":
+                    await uploader.send_heartbeat(
                     connector_status=status,
                     queue_depth=q_metrics["queue_depth"],
                     oldest_queued_event_seconds=q_metrics["oldest_queued_event_seconds"],
@@ -230,7 +237,8 @@ async def run_edge() -> None:
                 )
             else:
                 if not mapping:
-                    await uploader.send_heartbeat(
+                    if settings.operating_mode != "offline":
+                        await uploader.send_heartbeat(
                         connector_status="NOT_CONFIGURED",
                         queue_depth=q_metrics["queue_depth"],
                         oldest_queued_event_seconds=q_metrics["oldest_queued_event_seconds"],
@@ -253,7 +261,7 @@ async def run_edge() -> None:
                             settings.connector,
                             settings.tenant_id,
                         )
-                        ok = await uploader.upload_batch(
+                        ok = False if settings.operating_mode == "offline" else await uploader.upload_batch(
                             batch,
                             queue_depth=q_metrics["queue_depth"],
                             oldest_queued_event_seconds=q_metrics["oldest_queued_event_seconds"],
@@ -263,30 +271,31 @@ async def run_edge() -> None:
                                 uploader.events_queued_total += 1
                                 dedupe = f"{row['building_id']}:{row['source_point_id']}:{row['source_timestamp']}"
                                 queue.enqueue(row["event_id"], dedupe, row)
-                    else:
+                    elif settings.operating_mode != "offline":
                         await uploader.send_heartbeat(
                             connector_status="ONLINE",
                             queue_depth=q_metrics["queue_depth"],
                             oldest_queued_event_seconds=q_metrics["oldest_queued_event_seconds"],
                         )
 
-            for row_id, payload, attempts in queue.dequeue_batch():
-                qm = queue.metrics()
-                ok = await uploader.upload_batch(
-                    [payload],
-                    queue_depth=qm["queue_depth"],
-                    oldest_queued_event_seconds=qm["oldest_queued_event_seconds"],
-                    replay=True,
-                )
-                if ok:
-                    queue.ack(row_id)
-                else:
-                    new_attempts = queue.bump_attempts(row_id)
-                    if new_attempts >= queue.max_attempts:
-                        logger.critical(
-                            "Event id=%s exceeded max retries — retained in queue (no silent delete)",
-                            payload.get("event_id"),
-                        )
+            if settings.operating_mode != "offline":
+                for row_id, payload, attempts in queue.dequeue_batch():
+                    qm = queue.metrics()
+                    ok = await uploader.upload_batch(
+                        [payload],
+                        queue_depth=qm["queue_depth"],
+                        oldest_queued_event_seconds=qm["oldest_queued_event_seconds"],
+                        replay=True,
+                    )
+                    if ok:
+                        queue.ack(row_id)
+                    else:
+                        new_attempts = queue.bump_attempts(row_id)
+                        if new_attempts >= queue.max_attempts:
+                            logger.critical(
+                                "Event id=%s exceeded max retries — retained in queue (no silent delete)",
+                                payload.get("event_id"),
+                            )
 
         except ConnectorError as exc:
             logger.warning("Connector error: %s", exc)
