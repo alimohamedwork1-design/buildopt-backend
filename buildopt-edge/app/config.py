@@ -22,6 +22,7 @@ class EdgeSettings:
     metasys_password: str
     metasys_version: str
     mapped_points_file: str
+    operating_mode: str = "hybrid"
 
     @property
     def api_key(self) -> str:
@@ -30,6 +31,9 @@ class EdgeSettings:
 
     @classmethod
     def from_env(cls) -> "EdgeSettings":
+        mode = os.getenv("EDGE_OPERATING_MODE", "hybrid").strip().lower()
+        if mode not in ("offline", "hybrid", "hybrid_4g"):
+            raise ValueError("EDGE_OPERATING_MODE must be offline, hybrid or hybrid_4g")
         return cls(
             gateway_id=os.getenv("GATEWAY_ID", "edge-local-01"),
             tenant_id=os.getenv("TENANT_ID", "default"),
@@ -45,4 +49,5 @@ class EdgeSettings:
             metasys_password=os.getenv("METASYS_PASSWORD", ""),
             metasys_version=os.getenv("METASYS_VERSION", "v4"),
             mapped_points_file=os.getenv("MAPPED_POINTS_FILE", "/config/mapped_points.json"),
+            operating_mode=mode,
         )

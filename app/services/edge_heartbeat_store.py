@@ -48,6 +48,7 @@ class EdgeHeartbeatStore:
         clock_drift_seconds: Optional[int] = None,
         edge_clock_at: Optional[datetime] = None,
         connector_error: Optional[str] = None,
+        operating_mode: Optional[str] = None,
         last_read_at: Optional[datetime] = None,
     ) -> None:
         now = datetime.now(timezone.utc)
@@ -74,6 +75,7 @@ class EdgeHeartbeatStore:
             "last_seen": now,
             "last_read_at": last_read_at or now,
             "connector_error": connector_error,
+            "operating_mode": operating_mode or existing.get("operating_mode"),
         }
         self.record(building_id, protocol, last_read_at or now, telemetry_rate)
 
