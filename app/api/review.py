@@ -16,6 +16,7 @@ from app.services.measurement_verification import calculate_eui, estimate_unveri
 from app.services.scenario_constraints import ReadOnlyScenario
 from app.services.root_cause_review import FaultEvidence, suggest_root_causes
 from app.services.chiller_efficiency_review import ChillerEfficiencyInput, calculate_chiller_efficiency
+from app.services.huggingface_models import ForecastRequest, KnowledgeRequest, model_status, validate_forecast, knowledge_review
 
 router = APIRouter(prefix="/review", tags=["Read-only review"])
 
@@ -73,3 +74,18 @@ async def root_cause_review(body: RootCauseRequest, _user: UserContext = Depends
 @router.post("/chiller-efficiency")
 async def chiller_efficiency_review(body: ChillerEfficiencyInput, _user: UserContext = Depends(get_required_user)):
     return calculate_chiller_efficiency(body)
+
+
+@router.get("/hf/models")
+async def hf_models(_user: UserContext = Depends(get_required_user)):
+    return model_status()
+
+
+@router.post("/hf/forecast")
+async def hf_forecast(body: ForecastRequest, _user: UserContext = Depends(get_required_user)):
+    return validate_forecast(body)
+
+
+@router.post("/hf/knowledge")
+async def hf_knowledge(body: KnowledgeRequest, _user: UserContext = Depends(get_required_user)):
+    return knowledge_review(body)
