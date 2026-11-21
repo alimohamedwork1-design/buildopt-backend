@@ -14,6 +14,7 @@ from app.api import (
     assistant,
     buildings,
     compatibility,
+    evidence_copilot,
     data_health,
     discovery,
     energy,
@@ -148,6 +149,7 @@ api_prefix = "/api/v1"
 app.include_router(health.router, prefix=api_prefix)
 app.include_router(buildings.router, prefix=api_prefix)
 app.include_router(compatibility.router, prefix=api_prefix)
+app.include_router(evidence_copilot.router, prefix=api_prefix)
 app.include_router(engineering.router, prefix=api_prefix)
 app.include_router(energy.router, prefix=api_prefix)
 app.include_router(equipment.router, prefix=api_prefix)
