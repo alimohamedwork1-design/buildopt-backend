@@ -1,30 +1,37 @@
-version: "3.8"
-
+# Development reference only. Production on-prem use requires audited TLS,
+# authentication, backup and network configuration. No sample passwords.
 services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
-      - DEMO_MODE=${DEMO_MODE:-true}
-    env_file: .env
+      DEMO_MODE: ${DEMO_MODE:-true}
+      SECRET_KEY: ${SECRET_KEY:?Configure a strong API secret}
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ${INFLUX_TOKEN:?Configure private InfluxDB token}
+      INFLUX_ORG: ${INFLUX_ORG:-buildopt}
+      INFLUX_BUCKET: ${INFLUX_BUCKET:-building_metrics}
     depends_on:
       - influxdb
     restart: unless-stopped
-
+    security_opt:
+      - no-new-privileges:true
   influxdb:
     image: influxdb:2.7
-    ports:
-      - "8086:8086"
+    # No exposed host port. Use a private network and a documented backup.
     environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=buildopt2024
-      - DOCKER_INFLUXDB_INIT_ORG=buildopt
-      - DOCKER_INFLUXDB_INIT_BUCKET=building_metrics
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=buildopt-super-secret-token
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_ADMIN_USER:?Set Influx admin name}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:?Set strong Influx admin password}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-buildopt}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-building_metrics}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:?Set random token}
     volumes:
       - influxdb_data:/var/lib/influxdb2
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   influxdb_data:
