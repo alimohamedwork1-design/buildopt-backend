@@ -6,7 +6,6 @@ verified account identity and explicit building access.
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.deps.auth import get_required_user
-from app.deps.guards import assert_building_access
 from app.models.user_context import UserContext
 from app.services.compatibility_service import (
     SiteAssessment,
@@ -17,6 +16,15 @@ from app.services.compatibility_service import (
 )
 
 router = APIRouter(prefix="/compatibility", tags=["compatibility"])
+
+
+def require_assigned_building(user: UserContext, building_id: str) -> None:
+    # Stronger than general demo allowance: never assess a real site without
+    # an explicitly assigned building even in an account configured for demo.
+    if not user.authenticated:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if building_id not in user.building_ids and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Building not assigned to this account")
 
 
 @router.get("/matrix")
@@ -32,7 +40,7 @@ async def assess_site_readiness(
     body: SiteAssessment,
     user: UserContext = Depends(get_required_user),
 ) -> dict:
-    assert_building_access(user, body.building_id)
+    require_assigned_building(user, body.building_id)
     # No input data is persisted. Only a signed engineering review can
     # advance a production integration to field-validated.
     return assess_site(body)
@@ -43,7 +51,7 @@ async def assess_twin_readiness(
     body: TwinReadinessRequest,
     user: UserContext = Depends(get_required_user),
 ) -> dict:
-    assert_building_access(user, body.building_id)
+    require_assigned_building(user, body.building_id)
     try:
         return twin_readiness(body)
     except ValueError as exc:
