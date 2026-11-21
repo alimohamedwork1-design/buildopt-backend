@@ -18,6 +18,7 @@ from app.api import (
     discovery,
     energy,
     equipment,
+    engineering,
     fdd,
     gateways,
     gcc,
@@ -147,6 +148,7 @@ api_prefix = "/api/v1"
 app.include_router(health.router, prefix=api_prefix)
 app.include_router(buildings.router, prefix=api_prefix)
 app.include_router(compatibility.router, prefix=api_prefix)
+app.include_router(engineering.router, prefix=api_prefix)
 app.include_router(energy.router, prefix=api_prefix)
 app.include_router(equipment.router, prefix=api_prefix)
 app.include_router(alerts.router, prefix=api_prefix)
