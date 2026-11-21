@@ -87,8 +87,8 @@ def test_assessment_building_scope_rejects_other_tenant():
 
 
 def test_public_matrix_is_read_only_endpoint():
-    with TestClient(app) as client:
-        response = client.get("/api/v1/compatibility/matrix")
+    client = TestClient(app)
+    response = client.get("/api/v1/compatibility/matrix")
     assert response.status_code == 200
     assert response.json()["protocols"][0]["writeback"] == "disabled"
 
