@@ -13,6 +13,7 @@ from app.api import (
     alerts,
     assistant,
     buildings,
+    compatibility,
     data_health,
     discovery,
     energy,
@@ -145,6 +146,7 @@ app.add_middleware(
 api_prefix = "/api/v1"
 app.include_router(health.router, prefix=api_prefix)
 app.include_router(buildings.router, prefix=api_prefix)
+app.include_router(compatibility.router, prefix=api_prefix)
 app.include_router(energy.router, prefix=api_prefix)
 app.include_router(equipment.router, prefix=api_prefix)
 app.include_router(alerts.router, prefix=api_prefix)
