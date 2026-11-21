@@ -1,0 +1,43 @@
+name: Vendor-neutral gateway and on-prem safety
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  config-and-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose files with throwaway CI-only configuration
+        env:
+          SECRET_KEY: ci-only-non-production-configuration
+          INFLUX_ADMIN_USER: ci
+          INFLUX_ADMIN_PASSWORD: ci-only-no-production-credentials
+          INFLUX_TOKEN: ci-only-32-character-test-token-never-use-in-production
+          GATEWAY_ID: sim-gateway
+          BUILDING_ID: sim-building
+          TENANT_ID: sim-tenant
+          CLOUD_API_URL: https://example.invalid
+          GATEWAY_API_KEY: test-scoped-key-not-deployed
+          EDGE_CONNECTOR: bacnet
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f buildopt-edge/docker-compose.yml config --quiet
+          echo 'Compose syntax verified; not a production installation.'
+      - name: Offline lab regression CLI without site connectivity
+        run: |
+          python -m app.services.integration_lab --protocol bacnet_ip --scenario healthy
+          python -m app.services.integration_lab --protocol modbus_tcp --scenario packet_loss
+          python -m app.services.integration_lab --protocol mqtt --scenario clock_skew
+      - name: No unsafe secret defaults permitted in compose reference
+        run: |
+          if grep -niE 'buildopt2024|buildopt-super-secret-token|jci[_-]password|METASYS_PASSWORD:.*[^$]secret' docker-compose.yml buildopt-edge/docker-compose.yml; then
+            echo 'Forbidden example secret present'; exit 1;
+          fi
