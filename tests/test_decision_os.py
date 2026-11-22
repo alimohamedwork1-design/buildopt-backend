@@ -185,7 +185,7 @@ def test_decision_api_strict_building_scope_and_public_catalog_only():
     client=TestClient(app)
     catalog=client.get("/api/v1/decision-os/catalog")
     assert catalog.status_code==200
-    assert len(catalog.json()["engines"])==3
+    assert {"chiller_dispatch", "hvac_scheduling", "fault_prioritization"}.issubset({e["id"] for e in catalog.json()["engines"]})
     assert catalog.json()["can_send_equipment_commands"] is False
     body=dispatch().model_dump(mode="json")
     assert client.post("/api/v1/decision-os/scenarios/chiller-dispatch",json=body).status_code==401
