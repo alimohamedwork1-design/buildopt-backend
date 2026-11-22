@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     longitude: float = Field(default=55.2708, alias="LONGITUDE")
 
     ingest_api_key: str = Field(default="", alias="INGEST_API_KEY")
+    edgehub_sandbox_provision_enabled: bool = Field(default=False, alias="EDGEHUB_SANDBOX_PROVISION_ENABLED")
     poll_interval_seconds: int = Field(default=30, alias="POLL_INTERVAL_SECONDS")
     telemetry_store_backend: str = Field(default="auto", alias="TELEMETRY_STORE_BACKEND")
     telemetry_ingest_gated_supabase: bool = Field(
