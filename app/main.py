@@ -21,6 +21,7 @@ from app.api import (
     energy,
     equipment,
     engineering,
+    engineering_acceptance,
     fdd,
     gateways,
     gcc,
@@ -152,6 +153,7 @@ app.include_router(buildings.router, prefix=api_prefix)
 app.include_router(compatibility.router, prefix=api_prefix)
 app.include_router(decision_os.router, prefix=api_prefix)
 app.include_router(evidence_copilot.router, prefix=api_prefix)
+app.include_router(engineering_acceptance.router, prefix=api_prefix)
 app.include_router(engineering.router, prefix=api_prefix)
 app.include_router(energy.router, prefix=api_prefix)
 app.include_router(equipment.router, prefix=api_prefix)
