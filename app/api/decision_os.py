@@ -17,6 +17,7 @@ from app.services.decision_advanced import (
     analyze_tariff_profile, review_refrigeration_staging,
 )
 from app.services.decision_measurement_review import MeasurementReviewRequest, prepare_mv_review
+from app.services.decision_plant_partload import PlantPartLoadRequest, review_plant_part_load
 
 router = APIRouter(prefix="/decision-os", tags=["decision-os"])
 
@@ -34,6 +35,7 @@ async def decision_catalog() -> dict:
             {"id": "tou_energy_cost", "description": "24-hour hourly tariff and demand-charge proxy comparison"},
             {"id": "industrial_cooling_advisory", "description": "Safety-gated hypothetical industrial compressor staging, never PLC control"},
             {"id": "baseline_mv_review", "description": "Operator-provided CDD/runtime baseline regression for independent review, never certified savings"},
+            {"id": "chiller_part_load_review", "description": "Conservative proportional part-load COP and auxiliary-power review; read-only, uncalibrated"},
         ],
         "facility_graph": "operator_submitted_mapping_validation_only",
         "inputs": "operator_assumptions_or_synthetic_demo",
@@ -104,3 +106,12 @@ async def evaluate_baseline_mv(
 ) -> dict:
     require_assigned_building(user, payload.building_id)
     return prepare_mv_review(payload)
+
+
+@router.post("/scenarios/chiller-part-load-review")
+async def evaluate_chiller_part_load(
+    payload: PlantPartLoadRequest,
+    user: UserContext = Depends(get_required_user),
+) -> dict:
+    require_assigned_building(user, payload.building_id)
+    return review_plant_part_load(payload)
