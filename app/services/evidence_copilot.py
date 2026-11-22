@@ -22,7 +22,7 @@ class EvidenceQuality(str, Enum):
 
 
 class MeasuredPoint(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
     point_id: str = Field(min_length=2, max_length=160)
     equipment_id: str = Field(min_length=2, max_length=160)
     kind: Literal[
@@ -38,6 +38,8 @@ class MeasuredPoint(BaseModel):
 
     @model_validator(mode="after")
     def timestamp_order(self):
+        if any(x.tzinfo is None or x.utcoffset() is None for x in (self.measured_at,self.received_at,self.processed_at)):
+            raise ValueError("Evidence timestamps must include explicit timezone offsets")
         if not self.measured_at <= self.received_at <= self.processed_at:
             raise ValueError("Timestamp order must be measured <= received <= processed")
         return self
@@ -58,6 +60,8 @@ def _eligible(point: MeasuredPoint, now: datetime, freshness_minutes: int) -> bo
         return False
     measured=point.measured_at
     if measured.tzinfo is None:
+        return False
+    if point.received_at > now + timedelta(minutes=1) or point.processed_at > now + timedelta(minutes=1):
         return False
     if measured > now + timedelta(minutes=1):
         return False
@@ -94,7 +98,11 @@ def analyze_evidence(payload: InvestigationRequest, *, now: datetime | None=None
         supply=latest.get("chw_supply_c")
         ret=latest.get("chw_return_c")
         if supply and ret:
-            if supply.unit != "°C" or ret.unit!="°C":
+            if abs((supply.measured_at-ret.measured_at).total_seconds())>120:
+                add("UNALIGNED_CHW_SAMPLES","blocked",
+                    "Supply and return samples differ by more than two minutes; no delta-T calculation.",
+                    [supply,ret],"Acquire time-aligned, quality-approved readings before causal review.")
+            elif supply.unit != "°C" or ret.unit!="°C":
                 add("INVALID_UNITS","warning",
                     "Temperature points have inconsistent or unsupported units.",[supply,ret],
                     "Check sensor units and semantic mappings; no delta-T analysis performed.")
