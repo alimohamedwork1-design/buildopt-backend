@@ -105,3 +105,56 @@ def test_copilot_does_not_infer_delta_t_from_misaligned_samples():
     assert r["overall_status"]=="insufficient_data"
     assert r["findings"][0]["code"]=="UNALIGNED_CHW_SAMPLES"
     assert r["control_commands"]==[]
+
+
+def ahu(supply=18, ret=19, mode="cooling", threshold=3.0):
+    return InvestigationRequest(
+        building_id="building-a",equipment_id="ahu01",
+        equipment_type="air_handling_unit",
+        declared_operating_mode=mode,operator_min_cooling_delta_c=threshold,
+        explicitly_authorized_data=True,
+        points=[{**point("ahu_supply_c",supply),"equipment_id":"ahu01"},
+                {**point("ahu_return_c",ret),"equipment_id":"ahu01"}],
+    )
+
+
+def test_ahu_cooling_review_uses_aligned_points_without_claiming_fault():
+    r=analyze_evidence(ahu(),now=NOW)
+    assert r["overall_status"]=="review_required"
+    finding=r["findings"][0]
+    assert finding["code"]=="AHU_COOLING_DELTA_REVIEW"
+    assert set(finding["point_ids"])=={"chiller01.ahu_supply_c","chiller01.ahu_return_c"}
+    assert finding["verified_savings"] is None
+    assert finding["action_requires_engineer"] is True
+    assert r["control_commands"]==[] and r["automated_writeback"] is False
+
+
+def test_ahu_mode_unknown_observes_but_does_not_diagnose():
+    r=analyze_evidence(ahu(mode="unknown",threshold=None),now=NOW)
+    assert r["findings"][0]["code"]=="AHU_TEMPERATURE_DIFFERENCE_ONLY"
+    assert r["findings"][0]["severity"]=="info"
+
+
+def test_ahu_blocks_sensor_skew_units_and_missing_fresh_data():
+    req=ahu()
+    req.points[1].measured_at=NOW-timedelta(minutes=7)
+    r=analyze_evidence(req,now=NOW)
+    assert r["overall_status"]=="insufficient_data"
+    assert r["findings"][0]["code"]=="UNALIGNED_AHU_SAMPLES"
+    req=ahu()
+    req.points[0].unit="°F"
+    assert analyze_evidence(req,now=NOW)["findings"][0]["code"]=="INVALID_AHU_UNITS"
+    req=ahu()
+    req.points[1].quality="missing"
+    assert analyze_evidence(req,now=NOW)["findings"][0]["code"]=="INSUFFICIENT_AHU_EVIDENCE"
+
+
+def test_ahu_rejects_invalid_site_threshold_and_unauthorized_mode():
+    data=ahu().model_dump(mode="json")
+    data["operator_min_cooling_delta_c"]=float("nan")
+    with pytest.raises(ValidationError):
+        InvestigationRequest(**data)
+    data=ahu().model_dump(mode="json")
+    data["mode"]="write"
+    with pytest.raises(ValidationError):
+        InvestigationRequest(**data)
