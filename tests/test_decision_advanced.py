@@ -211,3 +211,46 @@ def test_advanced_endpoints_need_auth_and_correct_site():
         assert obs.json()["savings_verified"] is False
     finally:
         app.dependency_overrides.clear()
+
+
+def validation_periods(offset=0):
+    """Synthetic, disjoint periods: used only as an independently supplied model holdout."""
+    return [
+        {"period_id":f"V{i:02d}", "meter_reference":f"SIMULATED-VALIDATION-METER-{i:02d}",
+         "energy_kwh":1000+3*(40+i)+2*(172+8*i)+offset,
+         "cooling_degree_days":40+i, "operating_hours":172+8*i,
+         "coverage_fraction":1.0} for i in range(4)
+    ]
+
+
+def test_mv_optional_holdout_is_reported_without_claiming_field_calibration():
+    r=prepare_mv_review(mv(validation_periods=validation_periods()))
+    assert r["feasible"]
+    assert r["independent_holdout_provided"] is True
+    assert r["field_calibrated"] is False
+    assert r["holdout_validation"]["period_count"]==4
+    assert r["holdout_validation"]["cv_rmse_fraction"]==pytest.approx(0, abs=1e-8)
+    assert r["holdout_validation"]["nmbe_fraction"]==pytest.approx(0, abs=1e-8)
+    assert r["holdout_validation"]["independently_verified"] is False
+    assert r["savings_verified"] is False and r["control_commands"]==[]
+
+
+def test_mv_holdout_bias_blocks_draft_result_even_with_perfect_training_fit():
+    r=prepare_mv_review(mv(validation_periods=validation_periods(offset=600)))
+    assert not r["feasible"]
+    assert r["best"] is None
+    assert "holdout_bias_exceeds_review_threshold" in r["blockers"]
+    assert r["holdout_validation"]["independently_verified"] is False
+
+
+def test_mv_holdout_requires_three_unique_covered_periods_and_no_injection():
+    with pytest.raises(ValidationError):
+        mv(validation_periods=validation_periods()[:2])
+    with pytest.raises(ValidationError):
+        mv(validation_periods=[{**validation_periods()[0], "period_id":"B00"}, *validation_periods()[1:]])
+    low=validation_periods()
+    low[0]["coverage_fraction"]=.3
+    r=prepare_mv_review(mv(validation_periods=low))
+    assert not r["feasible"] and r["blockers"]==["inadequate_meter_coverage"]
+    with pytest.raises(ValidationError):
+        mv(validation_periods=[{**row, "energy_kwh":float("nan")} for row in validation_periods()])
