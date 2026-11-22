@@ -62,13 +62,13 @@ def test_bad_source_or_unsigned_permission_is_rejected():
     with pytest.raises(ValidationError):
         InvestigationRequest(**data)
 
-def test_other_equipment_is_never_silently_analyzed():
+def test_ahu_one_sensor_is_blocked_as_incomplete_data():
     req=InvestigationRequest(building_id="building-a",equipment_id="ahu01",
         equipment_type="air_handling_unit",points=[{
            **point("ahu_supply_c",16),"equipment_id":"ahu01"}])
     r=analyze_evidence(req,now=NOW)
     assert r["overall_status"]=="insufficient_data"
-    assert r["findings"][0]["code"]=="NO_ENGINEERING_RULE"
+    assert r["findings"][0]["code"]=="INSUFFICIENT_AHU_EVIDENCE"
 
 def test_endpoint_requires_real_building_entitlement():
     client=TestClient(app)
