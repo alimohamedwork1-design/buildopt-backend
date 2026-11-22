@@ -83,3 +83,25 @@ def test_endpoint_requires_real_building_entitlement():
         assert client.post("/api/v1/engineering-copilot/investigate",json=payload).status_code==403
     finally:
         app.dependency_overrides.clear()
+
+
+def test_copilot_rejects_nan_and_timezone_free_evidence():
+    d=case().model_dump(mode="json")
+    d["points"][0]["value"]=float("nan")
+    with pytest.raises(ValidationError):
+        InvestigationRequest(**d)
+    d=case().model_dump(mode="json")
+    d["points"][0]["received_at"]="2026-11-21T11:59:01"
+    with pytest.raises(ValidationError):
+        InvestigationRequest(**d)
+
+def test_copilot_does_not_infer_delta_t_from_misaligned_samples():
+    d=case().model_dump(mode="json")
+    # Both sensors are fresh but readings are five minutes apart.
+    d["points"][0]=point("chw_supply_c",6,age=1)
+    d["points"][1]=point("chw_return_c",8,age=6)
+    req=InvestigationRequest(**d)
+    r=analyze_evidence(req,now=NOW)
+    assert r["overall_status"]=="insufficient_data"
+    assert r["findings"][0]["code"]=="UNALIGNED_CHW_SAMPLES"
+    assert r["control_commands"]==[]
