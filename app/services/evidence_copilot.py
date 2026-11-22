@@ -50,6 +50,8 @@ class InvestigationRequest(BaseModel):
     building_id: str = Field(min_length=1, max_length=160)
     equipment_id: str = Field(min_length=2, max_length=160)
     equipment_type: Literal["chiller_plant", "air_handling_unit", "other"]
+    declared_operating_mode: Literal["cooling", "heating", "unknown"] = "unknown"
+    operator_min_cooling_delta_c: float | None = Field(default=None, ge=0.5, le=20.0)
     points: list[MeasuredPoint] = Field(min_length=1, max_length=100)
     explicitly_authorized_data: Literal[True] = True
     mode: Literal["read_only"] = "read_only"
@@ -129,6 +131,42 @@ def analyze_evidence(payload: InvestigationRequest, *, now: datetime | None=None
             add("INSUFFICIENT_CHW_EVIDENCE","blocked",
                 "Unable to evaluate chilled-water delta-T; missing quality-approved fresh readings: "+", ".join(missing),
                 [x for x in (supply,ret) if x],"Collect approved point mapping and fresh supply/return readings.")
+    elif payload.equipment_type=="air_handling_unit":
+        supply=latest.get("ahu_supply_c")
+        ret=latest.get("ahu_return_c")
+        if not supply or not ret:
+            missing=[kind for kind in ("ahu_supply_c","ahu_return_c") if kind not in latest]
+            add("INSUFFICIENT_AHU_EVIDENCE","blocked",
+                "Unable to compare AHU air temperatures; missing fresh, good-quality readings: "+", ".join(missing),
+                [x for x in (supply,ret) if x],"Collect mapped, current AHU supply and return temperature samples.")
+        elif abs((supply.measured_at-ret.measured_at).total_seconds())>120:
+            add("UNALIGNED_AHU_SAMPLES","blocked",
+                "AHU supply and return temperatures differ in timestamp by more than two minutes.",
+                [supply,ret],"Capture synchronized readings before reviewing air temperature separation.")
+        elif supply.unit!="°C" or ret.unit!="°C":
+            add("INVALID_AHU_UNITS","blocked",
+                "AHU air temperatures have unsupported or inconsistent units.",
+                [supply,ret],"Validate source units and semantic mappings.")
+        elif not (-20<=supply.value<=70 and -20<=ret.value<=70):
+            add("IMPLAUSIBLE_AHU_TEMPERATURE","blocked",
+                "AHU air temperatures are outside a conservative investigation range.",
+                [supply,ret],"Verify sensors and units; reject this comparison.")
+        else:
+            delta=ret.value-supply.value
+            if payload.declared_operating_mode=="cooling" and payload.operator_min_cooling_delta_c is not None:
+                if delta<payload.operator_min_cooling_delta_c:
+                    add("AHU_COOLING_DELTA_REVIEW","review",
+                        f"Observed return-minus-supply = {delta:.1f} °C, below the operator-stated "+
+                        f"{payload.operator_min_cooling_delta_c:.1f} °C review threshold.",
+                        [supply,ret],"Confirm AHU operating mode, sensor location, damper/valve conditions and design delta; not a fault diagnosis.")
+                else:
+                    add("AHU_COOLING_DELTA_OBSERVED","info",
+                        f"Observed return-minus-supply = {delta:.1f} °C; exceeds stated illustrative threshold.",
+                        [supply,ret],"Confirm with design airflow and independent commissioning data.")
+            else:
+                add("AHU_TEMPERATURE_DIFFERENCE_ONLY","info",
+                    f"Observed AHU return-minus-supply = {delta:.1f} °C. Cooling-mode threshold not established.",
+                    [supply,ret],"Declare valid heating/cooling operating mode and a site-specific threshold before fault review.")
     else:
         add("NO_ENGINEERING_RULE","blocked",
             "No validated equipment-specific rule is available in this assessment version.",
