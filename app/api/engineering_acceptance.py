@@ -8,6 +8,8 @@ from app.services.engineering_acceptance import (
     review_portfolio, review_twin_calibration, review_onprem,
 )
 
+from app.services.portfolio_normalization import NormalizedPortfolioRequest, review_normalized_portfolio
+
 router=APIRouter(prefix="/delivery-review",tags=["delivery-review"])
 
 
@@ -37,3 +39,13 @@ async def onprem_preflight(
 )->dict:
     require_assigned_building(user,payload.building_id)
     return review_onprem(payload)
+
+
+@router.post("/portfolio-normalized")
+async def normalized_portfolio_comparison(
+    payload:NormalizedPortfolioRequest,user:UserContext=Depends(get_required_user)
+)->dict:
+    require_assigned_building(user,payload.building_id)
+    for site in payload.sites:
+        require_assigned_building(user,site.building_id)
+    return review_normalized_portfolio(payload)
